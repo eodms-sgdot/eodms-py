@@ -15,7 +15,7 @@ def get_domain_config(environment='prod'):
     """
     
     if environment == 'staging':
-        eodms_dir = os.path.expanduser('~/.eodms')
+        # eodms_dir = os.path.expanduser('~/.eodms')
 
         return {
             'domain': os.environ['EODMS_STAGING_DOMAIN'],
@@ -23,6 +23,7 @@ def get_domain_config(environment='prod'):
             'verify_ssl': False  # Disable SSL verification for staging
         }
     else:
+        
         return {
             'domain': "https://www.eodms-sgdot.nrcan-rncan.gc.ca",
             'verify_ssl': True

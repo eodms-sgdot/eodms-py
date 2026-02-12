@@ -14,6 +14,7 @@ from . import config
 class DDS_API():
 
     def __init__(self, aaa_api, environment='prod'):
+
         domain_config = config.get_domain_config(environment)
         self.domain = domain_config['domain']
         self.verify_ssl = domain_config.get('verify_ssl', True)
@@ -30,6 +31,8 @@ class DDS_API():
     def get_item(self, collection, item_uuid, catalog="EODMS"):
 
         url = f"{self.domain}/dds/v1/item/{catalog}/{collection}/{item_uuid}"
+
+        self.logger.info(f"Get Item URL: {url}")
 
         access_token = self.aaa.get_access_token()
         headers = {"Authorization": f"Bearer {access_token}"}
@@ -77,6 +80,9 @@ class DDS_API():
             return None
 
         download_url = self.img_info.get('download_url')
+
+        # print(f"self.img_info: {self.img_info}")
+        # print(f"Download URL: {download_url}")
 
         if not download_url:
             return None
