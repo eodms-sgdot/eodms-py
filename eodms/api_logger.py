@@ -3,7 +3,7 @@ import sys
 
 
 # Create a logger that behaves like "print"
-eodms_logger = logging.getLogger('eodms_dds')
+eodms_logger = logging.getLogger('eodms_logger')
 eodms_logger.addHandler(logging.StreamHandler(sys.stdout))
 eodms_logger.setLevel(logging.INFO)
 

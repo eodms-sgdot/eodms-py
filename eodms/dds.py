@@ -19,7 +19,7 @@ class DDS_API():
         self.verify_ssl = domain_config.get('verify_ssl', True)
         self.img_info = None
 
-        self.logger = api_logger.EODMSLogger('eodms_dds', api_logger.eodms_logger)
+        self.logger = api_logger.EODMSLogger('eodms_logger', api_logger.eodms_logger)
 
         # self.logger.debug((f"ssl.get_server_certificate(): {ssl.get_server_certificate(self.domain)}"))
 

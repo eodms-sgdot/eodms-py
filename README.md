@@ -1,12 +1,12 @@
-EODMS DDS API Client
-====================
+EODMS API Client
+================
 
-The EODMS Data Delivery Service (DDS) API Client was designed using Python 3.10.
+The EODMS API Client was designed using Python 3.10.
 
 ## Pip Installation
 
 ```bash
-pip install git+https://github.com/eodms-sgdot/py-eodms-dds.git
+pip install git+https://github.com/eodms-sgdot/eodms-py.git
 ```
 
 ## Usage
@@ -16,13 +16,13 @@ pip install git+https://github.com/eodms-sgdot/py-eodms-dds.git
 > **_NOTE:_** Before using the DDS API, you'll need to get the UUID of an RCM image product. You can use the [py-eodms-rapi](https://github.com/eodms-sgdot/py-eodms-rapi) (see [rapi_dds_test.py](./tests/rapi_dds_test.py) for example code).
 
 ```python
-from eodms_dds import dds
+from eodms import aaa, dds
 
 # First, create the AAA_API with your EODMS username and password.
-aaa_api = aaa.AAA_API(username, password, env)
+aaa_api = aaa.AAA_API('myeodmsusername', 'myeodmspassword')
 
 # Next, create the client DDS API using the AAA obj
-dds_api = dds.DDS_API(aaa_api, env)
+dds_api = dds.DDS_API(aaa_api)
 
 # Set the Collection Id and the UUID
 collection = 'RCMImageProducts'
@@ -43,7 +43,7 @@ dds_api.download_item(out_folder)
 ### Clone Repository
 
 ```bash
-git clone https://github.com/eodms-sgdot/py-eodms-dds.git
+git clone https://github.com/eodms-sgdot/eodms-py.git
 ```
 
 ### Package Installation
@@ -51,7 +51,7 @@ git clone https://github.com/eodms-sgdot/py-eodms-dds.git
 If the pip installation above did not work, you can install from the cloned repository:
 
 ```bash
-cd py-eodms-dds
+cd eodms-py
 pip install -e .
 ```
 
