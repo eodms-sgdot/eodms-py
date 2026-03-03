@@ -37,7 +37,7 @@ class DDS_API():
         resp = self.aaa.prepare_request(url, headers=headers)
 
         if resp.status_code == 200:
-            self.logger.info("Successfully got item using DDS API")
+            self.logger.info(f"Successfully got item {collection}/{item_uuid}")
             try:
                 self.img_info = resp.json()
             except:
@@ -48,7 +48,7 @@ class DDS_API():
         elif resp.status_code == 202:
             self.img_info = resp.json()
             status = self.img_info.get('status')
-            self.logger.info(f"Image is being processed. Its current "
+            self.logger.info(f"{collection}/{item_uuid} is being prepared; current"
                   f"status is {status}.")
         else:
             try:
@@ -58,7 +58,7 @@ class DDS_API():
                 request_id = err_json.get('request_id')
                 trace_id = err_json.get('trace_id')
                 self.logger.error(err_json)
-                self.logger.error(f"Failed to get item using DDS API\n")
+                self.logger.error(f"Failed to get {collection}/{item_uuid}\n")
             except:
                 self.logger.error("Failed to get item using DDS API\n")
                 #  self.logger.error(f"resp: {resp.content}")
