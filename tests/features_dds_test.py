@@ -22,6 +22,13 @@ class OGCFeature:
         return f"OGCFeature(id={self.id}, type={self.type})"
     def to_dict(self):
         return self.raw
+    def print_feature(self):
+        print(f"Feature ID: {self.id}")
+        print(f"Type: {self.type}")
+        print(f"Geometry: {self.geometry}")
+        print("Properties:")
+        for key, value in self.properties.items():
+            print(f"  {key}: {value}")
 
 class OGCFeatureCollection:
     def __init__(self, collection_dict):
@@ -167,7 +174,7 @@ def download(dds_api, collection, item_uuid, out_folder):
 
     return item_info
 
-def run(username, password, collection, feature_id, env, bbox, datetime, limit, output, geojson=None):
+def run(username, password, collection, feature_id, env, bbox, datetime, limit, output, geojson=None, print_feature=False):
     domain_config = config.get_domain_config(env)
     base_url = f"{domain_config['domain']}/search"
     verify_ssl = domain_config.get('verify_ssl', True)
@@ -187,13 +194,13 @@ def run(username, password, collection, feature_id, env, bbox, datetime, limit, 
 
     if feature_id:
         feature = client.get_feature(collection, feature_id)
-        print(f"Feature ID: {feature.id} geom: {feature.geometry} ")
-
-        dds_api = dds.DDS_API(aaa_api, env)
-
-        # If UUID is provided, skip search and download directly
-        print(f"Downloading image with UUID: {feature.id}")
-        download(dds_api, collection, feature.id, '.')
+        
+        if print_feature:
+            feature.print_feature()
+        else:
+            aaa_api = aaa.AAA_API(username, password, env) if username and password else None
+            dds_api = dds.DDS_API(aaa_api, env)
+            download(dds_api, collection, feature.id, '.')
             
         return
 
@@ -323,7 +330,8 @@ def run(username, password, collection, feature_id, env, bbox, datetime, limit, 
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--limit', '-l', required=False, default=None, type=int, help='Maximum number of features to return.')
 @click.option('--output', '-o', required=False, help='Output file path to save the results (JSON format).')
-def main(username, password, collection, feature_id, bbox, geojson, datetime, env, limit, output):
+@click.option('--print', '-pr', 'print_feature', is_flag=True, help='Print the feature when --feature_id is provided instead of downloading.')
+def main(username, password, collection, feature_id, bbox, geojson, datetime, env, limit, output, print_feature):
     """
     OGC Features CLI for EODMS Search API.
     
@@ -367,7 +375,7 @@ def main(username, password, collection, feature_id, bbox, geojson, datetime, en
             click.echo(f"Error parsing bbox: {e}", err=True)
             return
     
-    run(username, password, collection, feature_id, env, bbox_list, datetime, limit, output, geojson)
+    run(username, password, collection, feature_id, env, bbox_list, datetime, limit, output, geojson, print_feature)
     
 
 if __name__ == '__main__':
