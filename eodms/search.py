@@ -1,3 +1,5 @@
+import re
+import warnings
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 
@@ -20,16 +22,61 @@ class Search_API:
 
 		if aaa_api:
 			access_token = aaa_api.get_access_token()
-			if not access_token:
-				raise RuntimeError("Authentication failed - no access token available")
-			stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
-			print(f"Using authenticated catalog: {self.search_endpoint}")
+			if access_token:
+				stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
+				print(f"Using authenticated catalog: {self.search_endpoint}")
+			else:
+				print("Authentication token unavailable; using unauthenticated catalog access.")
+				print(f"Using unauthenticated catalog: {self.search_endpoint}")
 		else:
 			print(f"Using unauthenticated catalog: {self.search_endpoint}")
 
 		self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
 		self.client.add_conforms_to("FILTER")
 		self.client.add_conforms_to("QUERY")
+
+	@staticmethod
+	def extract_filter_fields(filter_text: Optional[str]) -> List[str]:
+		"""Extract likely property names from a CQL2 text expression."""
+		if not filter_text:
+			return []
+
+		func_names = {
+			"and", "or", "not", "in", "between", "like", "ilike", "is", "null", "true", "false",
+			"s_intersects", "s_contains", "s_within", "s_overlaps", "s_touches", "s_crosses", "s_disjoint",
+			"t_before", "t_after", "t_intersects", "a_contains", "a_overlaps",
+			"point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection",
+		}
+
+		# Strip quoted strings before token matching so string literals are not treated as fields.
+		cleaned = re.sub(r"'[^']*'|\"[^\"]*\"", " ", filter_text)
+		tokens = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_:.]*\b", cleaned)
+
+		fields: List[str] = []
+		seen = set()
+		for token in tokens:
+			lower_token = token.lower()
+			if lower_token in func_names:
+				continue
+			if re.fullmatch(r"\d+(\.\d+)?", token):
+				continue
+			if token not in seen:
+				seen.add(token)
+				fields.append(token)
+
+		return fields
+
+	@staticmethod
+	def validate_filter_fields(filter_text: Optional[str], queryables: Dict[str, Any]) -> List[str]:
+		"""Return any filter fields that are not present in collection queryables."""
+		if not filter_text:
+			return []
+
+		properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
+		allowed_fields = set(properties.keys())
+		requested_fields = Search_API.extract_filter_fields(filter_text)
+
+		return [field for field in requested_fields if field not in allowed_fields]
 
 	@staticmethod
 	def parse_filter_text(filter_text: Optional[str]):
@@ -40,6 +87,10 @@ class Search_API:
 		filter_text = filter_text.strip()
 		if not filter_text:
 			return None
+
+		# Normalize compact comparisons like "field=16" to "field = 16".
+		filter_text = re.sub(r"\s*(<=|>=|<>|=|<|>)\s*", r" \1 ", filter_text)
+		filter_text = re.sub(r"\s+", " ", filter_text).strip()
 
 		return filter_text
 
@@ -111,6 +162,7 @@ class Search_API:
 		try:
 			items: List[Dict[str, Any]] = []
 			print(f"Searching for up to {limit} items...")
+			filter_text = kwargs.get('filter')
 
 			for collection_id in collections:
 				if len(items) >= limit:
@@ -120,6 +172,21 @@ class Search_API:
 				if collection is None:
 					print(f"Collection not found: {collection_id}")
 					continue
+
+				if filter_text:
+					queryables = collection.get_queryables()
+					invalid_fields = Search_API.validate_filter_fields(filter_text, queryables)
+					if invalid_fields:
+						properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
+						valid_fields = sorted(properties.keys())
+						print(
+							f"Invalid filter field(s) for collection '{collection_id}': {', '.join(invalid_fields)}"
+						)
+						if valid_fields:
+							print(f"Available queryable fields: {', '.join(valid_fields)}")
+						else:
+							print("No queryable fields are available for this collection.")
+						continue
 
 				remaining = limit - len(items)
 				item_search = ItemSearch(
