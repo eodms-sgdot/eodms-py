@@ -29,7 +29,20 @@ def build_stac_client(aaa_api=None, environment='prod'):
 
     client = Client.open(search_endpoint, stac_io=stac_api_io)
     client.add_conforms_to("FILTER")
+    client.add_conforms_to("QUERY")
     return client
+
+
+def parse_filter_text(filter_text: Optional[str]):
+    """Normalize a CQL2 text filter string."""
+    if not filter_text:
+        return None
+
+    filter_text = filter_text.strip()
+    if not filter_text:
+        return None
+
+    return filter_text
 
 
 def search(aaa_api=None, environment='prod', 
@@ -56,33 +69,30 @@ def search(aaa_api=None, environment='prod',
         print(str(e))
         return []
     
-    available_collections = list(client.get_collections())
-
-    # Print available collections and per-collection queryables
-    print("Available collections and queryables:")
-    for collection in available_collections:
-        print(f"  - {collection.id}")
-        try:
-            
-            queryables = collection.get_queryables()
-            properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
-            if properties:
-                for field_name, field_schema in properties.items():
-                    field_type = "unknown"
-                    if isinstance(field_schema, dict):
-                        field_type = field_schema.get("type", "unknown")
-                    print(f"      * {field_name} ({field_type})")
-            else:
-                print("      * No queryable properties returned")
-        except Exception as e:
-            print(f"      * Queryables not available: {e}")
-    print()
-
-
-    if collections is None:
-        print("No collections specified, bailing after listing available collections.")
-        return []
     
+    if collections is None:
+
+        # Print available collections and per-collection queryables
+        available_collections = list(client.get_collections())
+
+        print("Available collections and queryables:")
+        for collection in available_collections:
+            print(f"  - {collection.id}")
+            try:
+                
+                queryables = collection.get_queryables()
+                properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
+                if properties:
+                    for field_name, field_schema in properties.items():
+                        field_type = "unknown"
+                        if isinstance(field_schema, dict):
+                            field_type = field_schema.get("type", "unknown")
+                        print(f"      * {field_name} ({field_type})")
+                else:
+                    print("      * No queryable properties returned")
+            except Exception as e:
+                print(f"      * Queryables not available: {e}")
+        return []
 
     # Build search parameters
     search_params = {}
@@ -166,7 +176,7 @@ def save_items_geojson(items: List[Dict[str, Any]], output_file: str):
 
     print(f"Saved {len(feature_collection['features'])} items to {output_file}")
 
-def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None, bbox=None, uuid=None, limit=100, output=None):
+def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None, bbox=None, uuid=None, limit=100, output=None, filter_text=None):
 
     # Create shared AAA instance
     aaa_api = aaa.AAA_API(eodms_user, eodms_pwd, env) if eodms_user and eodms_pwd else None
@@ -179,6 +189,8 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
         download(dds_api, collection, uuid, out_folder)
         return
 
+    parsed_filter = parse_filter_text(filter_text)
+
     # Search using pystac_client with shared AAA instance
     items = search(
         aaa_api=aaa_api,
@@ -186,7 +198,9 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
         collections=[collection] if collection else None,
         datetime=datetime_range,
         bbox=bbox,
-        limit=limit
+        limit=limit,
+        filter=parsed_filter,
+        filter_lang='cql2-text' if parsed_filter else None,
     )
 
     if items is not None and output:
@@ -211,12 +225,14 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
               help='Bounding box as comma-separated values: west,south,east,north (e.g., "-100,45,-95,50").')
 @click.option('--limit', '-l', required=False, default=1000, type=int,
               help='Maximum number of items to fetch from search (default: 1000).')
+@click.option('--filter', '-f', 'filter_text', required=False, default=None,
+              help="CQL2 text filter expression (e.g., roll_number = 'KA3').")
 @click.option('--output', required=False, default=None,
               help='Output GeoJSON filename (e.g., results.geojson).')
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--out_folder', '-o', required=False, default='.',
               help='The output folder.')
-def cli(username, password, collection, uuid, datetime, bbox, limit, output, env, out_folder):
+def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, output, env, out_folder):
     """
     Search and Download images from EODMS STAC catalog and DDS.
     
@@ -258,7 +274,7 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, output, env
             click.echo(f"Error parsing bbox: {e}", err=True)
             return
 
-    run(username, password, collection, env, out_folder, datetime, bbox_list, uuid, limit, output)
+    run(username, password, collection, env, out_folder, datetime, bbox_list, uuid, limit, output, filter_text)
 
 if __name__ == '__main__':
     cli()
