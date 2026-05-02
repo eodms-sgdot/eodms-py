@@ -11,7 +11,7 @@ from .__version__ import __version__
 from . import config
 
 class AAA_Creds():
-
+    """Authentication Authorization and Accounting (AAA) credentials management class."""
     def __init__(self):
 
         self.access_token = None

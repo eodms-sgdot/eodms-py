@@ -12,7 +12,8 @@ from . import api_logger
 from . import config
 
 class DDS_API():
-
+    """Client for the EODMS Data Delivery Service (DDS) API."""
+    
     def __init__(self, aaa_api, environment='prod'):
         domain_config = config.get_domain_config(environment)
         self.domain = domain_config['domain']

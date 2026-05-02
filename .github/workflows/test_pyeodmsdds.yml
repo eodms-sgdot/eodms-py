@@ -1,6 +1,6 @@
 # This is a basic workflow to help you get started with Actions
 
-name: py-eodms-dds Tests
+name: eodms-py Tests
 
 # Controls when the workflow will run
 on:
@@ -33,7 +33,7 @@ jobs:
           sudo pip install py-eodms-rapi -U
 
       # Runs a single command using the runners shell
-      - name: Run py-eodms-dds Test 1 - RAPI and DDS Search and Order
+      - name: Run eodms-py Test 1 - RAPI and DDS Search and Order
         # continue-on-error: true
         env:
           EODMS_USER: ${{ secrets.EODMS_USER }}

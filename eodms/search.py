@@ -6,7 +6,6 @@ from pystac_client.stac_api_io import StacApiIO
 
 from . import config
 
-
 class Search_API:
 	"""STAC search client for the EODMS catalog."""
 
