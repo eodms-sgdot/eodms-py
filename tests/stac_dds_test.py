@@ -1,7 +1,7 @@
 from eodms_dds import dds, aaa, config
-from pystac_client import Client
+from pystac_client import Client, ItemSearch
 from typing import Optional, List, Dict, Any
-# import json
+import json
 import click
 import os
 import ssl
@@ -10,6 +10,7 @@ from requests.packages import urllib3
 from urllib.parse import unquote
 from urllib.parse import urlparse, parse_qs
 
+
 def search(aaa_api=None, environment='prod', 
                 collections: Optional[List[str]] = None,
                 bbox: Optional[List[float]] = None,
@@ -17,7 +18,7 @@ def search(aaa_api=None, environment='prod',
                 limit = 100,
                 **kwargs) -> List[Dict[str, Any]]:
     """
-    Search the EODMS STAC catalog using pystac_client.
+    Search the EODMS STAC catalog using the OGC Features items endpoint.
     
     :param aaa_api: Optional AAA_API instance for authentication
     :param environment: Environment to use ('prod' or 'staging')
@@ -45,9 +46,9 @@ def search(aaa_api=None, environment='prod',
             print("Authentication failed - no access token available")
             return []
         headers = {"Authorization": f"Bearer {access_token}"}
-        print(f"Using authenticated search: {search_endpoint}")
+        print(f"Using authenticated catalog: {search_endpoint}")
     else:
-        print(f"Using unauthenticated search: {search_endpoint}")
+        print(f"Using unauthenticated catalog: {search_endpoint}")
     
     # Open client with custom session
     if environment == 'staging':
@@ -71,9 +72,6 @@ def search(aaa_api=None, environment='prod',
 
     search_params['limit'] = limit
     
-    if collections:
-        search_params['collections'] = collections
-    
     if bbox:
         search_params['bbox'] = bbox
     
@@ -88,17 +86,34 @@ def search(aaa_api=None, environment='prod',
         items = []
         
         print(f"Searching for up to {limit} items...")
-        search = client.search(**search_params, method='GET')
-        print(unquote(search.url_with_parameters()))
-        
-        search_results = search.item_collection()
-        
-        # Convert to list of dictionaries
-        items = [item.to_dict() for item in search_results]
+
+        collection_ids = collections or [collection.id for collection in client.get_collections()]
+        for collection_id in collection_ids:
+            if len(items) >= limit:
+                break
+
+            collection = client.get_collection(collection_id)
+            if collection is None:
+                print(f"Collection not found: {collection_id}")
+                continue
+
+            remaining = limit - len(items)
+            item_search = ItemSearch(
+                url=collection.get_single_link('items').href,
+                method='GET',
+                client=client,
+                max_items=remaining,
+                **search_params,
+            )
+
+            print(unquote(item_search.url_with_parameters()))
+
+            for item in item_search.items_as_dicts():
+                items.append(item)
+                if len(items) >= limit:
+                    break
+
         print(f"Retrieved {len(items)} items")
-        
-        # Trim to limit if we retrieved more
-        items = items[:limit]
         print(f"Found {len(items)} items (limited to {limit})")
 
     except Exception as e:
@@ -121,7 +136,20 @@ def download(dds_api, collection, item_uuid, out_folder):
 
     return item_info
 
-def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None, bbox=None, uuid=None, limit=100):
+
+def save_items_geojson(items: List[Dict[str, Any]], output_file: str):
+    """Save item dictionaries as a GeoJSON FeatureCollection."""
+    feature_collection = {
+        "type": "FeatureCollection",
+        "features": items or [],
+    }
+
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(feature_collection, f, indent=2)
+
+    print(f"Saved {len(feature_collection['features'])} items to {output_file}")
+
+def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None, bbox=None, uuid=None, limit=100, output=None):
 
     # Create shared AAA instance
     aaa_api = aaa.AAA_API(eodms_user, eodms_pwd, env) if eodms_user and eodms_pwd else None
@@ -143,11 +171,18 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
         bbox=bbox,
         limit=limit
     )
+
+    if items is not None and output:
+        save_items_geojson(items, output)
+
     
-    if items and len(items) > 0:
+    
+    if items and len(items) > 0 and eodms_user and eodms_pwd:
         uuid = items[0].get('id')
         print(f"Downloading the first image (UUID: {uuid}) from the list")
         download(dds_api, collection, uuid, out_folder)
+    elif items and len(items) > 0:
+        print("No credentials provided, skipping download.")
 
 
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
@@ -161,10 +196,12 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
               help='Bounding box as comma-separated values: west,south,east,north (e.g., "-100,45,-95,50").')
 @click.option('--limit', '-l', required=False, default=1000, type=int,
               help='Maximum number of items to fetch from search (default: 1000).')
+@click.option('--output', required=False, default=None,
+              help='Output GeoJSON filename (e.g., results.geojson).')
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--out_folder', '-o', required=False, default='.',
               help='The output folder.')
-def cli(username, password, collection, uuid, datetime, bbox, limit, env, out_folder):
+def cli(username, password, collection, uuid, datetime, bbox, limit, output, env, out_folder):
     """
     Search and Download images from EODMS STAC catalog and DDS.
     
@@ -206,7 +243,7 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, env, out_fo
             click.echo(f"Error parsing bbox: {e}", err=True)
             return
 
-    run(username, password, collection, env, out_folder, datetime, bbox_list, uuid, limit)
+    run(username, password, collection, env, out_folder, datetime, bbox_list, uuid, limit, output)
 
 if __name__ == '__main__':
     cli()
