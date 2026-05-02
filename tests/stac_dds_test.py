@@ -1,173 +1,8 @@
-from eodms_dds import dds, aaa, config
-from pystac_client import Client, ItemSearch
-from pystac_client.stac_api_io import StacApiIO
+from eodms import dds, aaa, search
 from typing import Optional, List, Dict, Any
 import json
-import click
 import os
-from urllib.parse import unquote
-
-
-def build_stac_client(aaa_api=None, environment='prod'):
-    """Build an authenticated pystac-client configured for the target environment."""
-    domain_config = config.get_domain_config(environment)
-    domain = domain_config['domain']
-    search_endpoint = f"{domain}/search"
-    verify_ssl = domain_config.get('verify_ssl', True)
-
-    stac_api_io = StacApiIO()
-    stac_api_io.session.verify = verify_ssl
-
-    if aaa_api:
-        access_token = aaa_api.get_access_token()
-        if not access_token:
-            raise RuntimeError("Authentication failed - no access token available")
-        stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
-        print(f"Using authenticated catalog: {search_endpoint}")
-    else:
-        print(f"Using unauthenticated catalog: {search_endpoint}")
-
-    client = Client.open(search_endpoint, stac_io=stac_api_io)
-    client.add_conforms_to("FILTER")
-    client.add_conforms_to("QUERY")
-    return client
-
-
-def parse_filter_text(filter_text: Optional[str]):
-    """Normalize a CQL2 text filter string."""
-    if not filter_text:
-        return None
-
-    filter_text = filter_text.strip()
-    if not filter_text:
-        return None
-
-    return filter_text
-
-
-def build_cql2_example(field_name: str, field_schema: Any) -> str:
-    """Build a simple CQL2 text example expression for a queryable field."""
-    field_type = None
-    field_format = None
-    if isinstance(field_schema, dict):
-        field_type = field_schema.get("type")
-        field_format = field_schema.get("format")
-
-    if field_type in ("number", "integer"):
-        return f"{field_name} = 1"
-    if field_type == "boolean":
-        return f"{field_name} = true"
-    if field_format == "date-time":
-        return f"{field_name} >= '2020-01-01T00:00:00Z'"
-    if field_type == "geometry-any":
-        return f"S_INTERSECTS({field_name}, POLYGON((-100 45, -95 45, -95 50, -100 50, -100 45)))"
-    return f"{field_name} = 'example'"
-
-
-def search(aaa_api=None, environment='prod', 
-                collections: Optional[List[str]] = None,
-                bbox: Optional[List[float]] = None,
-                datetime: Optional[str] = None,
-                limit = 100,
-                **kwargs) -> List[Dict[str, Any]]:
-    """
-    Search the EODMS STAC catalog using the OGC Features items endpoint.
-    
-    :param aaa_api: Optional AAA_API instance for authentication
-    :param environment: Environment to use ('prod' or 'staging')
-    :param collections: List of collection IDs to search
-    :param bbox: Bounding box as [west, south, east, north]
-    :param datetime: Temporal filter as ISO 8601 string or range
-    :param kwargs: Additional search parameters
-    :return: List of item dictionaries
-    """
-    
-    try:
-        client = build_stac_client(aaa_api=aaa_api, environment=environment)
-    except RuntimeError as e:
-        print(str(e))
-        return []
-    
-    
-    if collections is None:
-
-        # Print available collections and per-collection queryables
-        available_collections = list(client.get_collections())
-
-        print("Available collections and queryables:")
-        for collection in available_collections:
-            print(f"  - {collection.id}")
-            try:
-                
-                queryables = collection.get_queryables()
-                properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
-                if properties:
-                    for field_name, field_schema in properties.items():
-                        field_type = "unknown"
-                        if isinstance(field_schema, dict):
-                            field_type = field_schema.get("type", "unknown")
-                        example_expr = build_cql2_example(field_name, field_schema)
-                        print(f"      * {field_name} ({field_type}) e.g. {example_expr}")
-                else:
-                    print("      * No queryable properties returned")
-            except Exception as e:
-                print(f"      * Queryables not available: {e}")
-        return []
-
-    # Build search parameters
-    search_params = {}
-
-    search_params['limit'] = limit
-    
-    if bbox:
-        search_params['bbox'] = bbox
-    
-    if datetime:
-        search_params['datetime'] = datetime
-    
-    # Add any additional parameters
-    search_params.update(kwargs)
-    
-    # Execute search
-    try:
-        items = []
-        
-        print(f"Searching for up to {limit} items...")
-
-        collection_ids = collections or [collection.id for collection in available_collections]
-        for collection_id in collection_ids:
-            if len(items) >= limit:
-                break
-
-            collection = client.get_collection(collection_id)
-            if collection is None:
-                print(f"Collection not found: {collection_id}")
-                continue
-
-            remaining = limit - len(items)
-            item_search = ItemSearch(
-                url=collection.get_single_link('items').href,
-                method='GET',
-                client=client,
-                max_items=remaining,
-                **search_params,
-            )
-
-            print(unquote(item_search.url_with_parameters()))
-
-            for item in item_search.items_as_dicts():
-                items.append(item)
-                if len(items) >= limit:
-                    break
-
-        print(f"Retrieved {len(items)} items")
-        print(f"Found {len(items)} items (limited to {limit})")
-
-    except Exception as e:
-        print(f"Search error: {e}")
-        return []
-    
-    return items
+import click
 
 def download(dds_api, collection, item_uuid, out_folder):
 
@@ -209,12 +44,11 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
         download(dds_api, collection, uuid, out_folder)
         return
 
-    parsed_filter = parse_filter_text(filter_text)
+    parsed_filter = search.parse_filter_text(filter_text)
 
     # Search using pystac_client with shared AAA instance
-    items = search(
-        aaa_api=aaa_api,
-        environment=env,
+    search_api = search.Search_API(aaa_api, env)
+    items = search_api.stac_search(
         collections=[collection] if collection else None,
         datetime=datetime_range,
         bbox=bbox,

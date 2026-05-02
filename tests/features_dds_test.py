@@ -1,4 +1,4 @@
-from eodms_dds import dds, aaa, config
+from eodms import dds, aaa, config
 import requests
 from typing import List, Dict, Any, Optional
 import os

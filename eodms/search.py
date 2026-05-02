@@ -1,148 +1,155 @@
+from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
+
+from pystac_client import Client, ItemSearch
+from pystac_client.stac_api_io import StacApiIO
+
 from . import config
-import requests
-from typing import List, Dict, Any, Optional
 
-class OGCFeature:
-    def __init__(self, feature_dict):
-        self.id = feature_dict.get('id')
-        self.type = feature_dict.get('type')
-        self.geometry = feature_dict.get('geometry')
-        self.properties = feature_dict.get('properties', {})
-        self.raw = feature_dict
-    def __repr__(self):
-        return f"OGCFeature(id={self.id}, type={self.type})"
-    def to_dict(self):
-        return self.raw
-
-class OGCFeatureCollection:
-    def __init__(self, collection_dict):
-        self.type = collection_dict.get('type')
-        self.features = [OGCFeature(f) for f in collection_dict.get('features', [])]
-        self.raw = collection_dict
-    def __repr__(self):
-        return f"OGCFeatureCollection(type={self.type}, features={len(self.features)})"
-    def to_dict(self):
-        return self.raw
-
-class OGCFeaturesClient:
-    def __init__(self, base_url, access_token=None, verify_ssl=True):
-        self.base_url = base_url.rstrip('/')
-        self.session = requests.Session()
-        self.session.verify = verify_ssl
-        self.headers = {}
-        if access_token:
-            self.headers['Authorization'] = f'Bearer {access_token}'
-
-    def get_collections(self):
-        url = f"{self.base_url}/collections"
-        resp = self.session.get(url, headers=self.headers)
-        resp.raise_for_status()
-        return resp.json()
-
-    def get_features(self, collection_id, bbox=None, datetime=None, limit=10):
-        url = f"{self.base_url}/collections/{collection_id}/items"
-        params = {}
-        if bbox:
-            params['bbox'] = ','.join(str(x) for x in bbox)
-        if datetime:
-            params['datetime'] = datetime
-        params['limit'] = limit
-        
-        all_features = []
-        page_token = None
-        page_count = 0
-        
-        while len(all_features) < limit:
-            if page_token:
-                print(f"Fetching page {page_count + 1} (features: {len(all_features)} token: {page_token})")
-                params['page_token'] = page_token
-            page_count += 1
-            resp = self.session.get(url, headers=self.headers, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            features = data.get('features', [])
-            all_features.extend(features)
-            
-            # Check for next page token in links or directly in response
-            page_token = None
-            links = data.get('links', [])
-            for link in links:
-                if link.get('rel') == 'next':
-                    # Extract page_token from next link if present
-                    next_url = link.get('href', '')
-                    if 'page_token=' in next_url:
-                        page_token = next_url.split('page_token=')[1].split('&')[0]
-                    break
-            
-            # Alternative: check if page_token is directly in response
-            if not page_token:
-                page_token = data.get('page_token')
-            
-            if not page_token:
-                break
-        
-        # Construct final collection with all features
-        final_data = data.copy()
-        final_data['features'] = all_features
-        return OGCFeatureCollection(final_data)
-
-    def get_feature(self, collection_id, feature_id):
-        url = f"{self.base_url}/collections/{collection_id}/items/{feature_id}"
-        resp = self.session.get(url, headers=self.headers)
-        resp.raise_for_status()
-        return OGCFeature(resp.json())
-
-# OGC Features: /collections
 
 class Search_API:
+	"""STAC search client for the EODMS catalog."""
 
-    def __init__(self, aaa_api=None):
-        self.aaa_api = aaa_api
+	def __init__(self, aaa_api=None, environment='prod'):
+		domain_config = config.get_domain_config(environment)
+		domain = domain_config['domain']
+		self.search_endpoint = f"{domain}/search"
+		verify_ssl = domain_config.get('verify_ssl', True)
 
-    def get_collections(self, environment='prod') -> List[Dict[str, Any]]:
-        domain_config = config.get_domain_config(environment)
-        domain = domain_config['domain']
-        search_endpoint = f"{domain}/search"
-        verify_ssl = domain_config.get('verify_ssl', True)
-        access_token = None
-        if self.aaa_api:
-            access_token = self.aaa_api.get_access_token()
-        client = OGCFeaturesClient(search_endpoint, access_token, verify_ssl)
-        return client.get_collections()
+		stac_api_io = StacApiIO()
+		stac_api_io.session.verify = verify_ssl
 
-    # OGC Features: /collections/{collectionId}/items
+		if aaa_api:
+			access_token = aaa_api.get_access_token()
+			if not access_token:
+				raise RuntimeError("Authentication failed - no access token available")
+			stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
+			print(f"Using authenticated catalog: {self.search_endpoint}")
+		else:
+			print(f"Using unauthenticated catalog: {self.search_endpoint}")
 
-    def get_features(self, 
-        collection_id: str,
-        environment='prod',
-        bbox: Optional[List[float]] = None,
-        datetime: Optional[str] = None,
-        limit: int = 10
-    ) -> Dict[str, Any]:
-        domain_config = config.get_domain_config(environment)
-        domain = domain_config['domain']
-        search_endpoint = f"{domain}/search"
-        verify_ssl = domain_config.get('verify_ssl', True)
-        access_token = None
-        if self.aaa_api:
-            access_token = self.aaa_api.get_access_token()
-        client = OGCFeaturesClient(search_endpoint, access_token, verify_ssl)
-        return client.get_features(collection_id, bbox, datetime, limit)
+		self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
+		self.client.add_conforms_to("FILTER")
+		self.client.add_conforms_to("QUERY")
 
-    # OGC Features: /collections/{collectionId}/items/{featureId}
+	@staticmethod
+	def parse_filter_text(filter_text: Optional[str]):
+		"""Normalize a CQL2 text filter string."""
+		if not filter_text:
+			return None
 
-    def get_feature(self, 
-        collection_id: str,
-        feature_id: str,
-        environment='prod'
-    ) -> Dict[str, Any]:
-        domain_config = config.get_domain_config(environment)
-        domain = domain_config['domain']
-        search_endpoint = f"{domain}/search"
-        verify_ssl = domain_config.get('verify_ssl', True)
-        access_token = None
-        if self.aaa_api:
-            access_token = self.aaa_api.get_access_token()
-        client = OGCFeaturesClient(search_endpoint, access_token, verify_ssl)
-        return client.get_feature(collection_id, feature_id)
+		filter_text = filter_text.strip()
+		if not filter_text:
+			return None
+
+		return filter_text
+
+	@staticmethod
+	def build_cql2_example(field_name: str, field_schema: Any) -> str:
+		"""Build a simple CQL2 text example expression for a queryable field."""
+		field_type = None
+		field_format = None
+		if isinstance(field_schema, dict):
+			field_type = field_schema.get("type")
+			field_format = field_schema.get("format")
+
+		if field_type in ("number", "integer"):
+			return f"{field_name} = 1"
+		if field_type == "boolean":
+			return f"{field_name} = true"
+		if field_format == "date-time":
+			return f"{field_name} >= '2020-01-01T00:00:00Z'"
+		if field_type == "geometry-any":
+			return f"S_INTERSECTS({field_name}, POLYGON((-100 45, -95 45, -95 50, -100 50, -100 45)))"
+		return f"{field_name} = 'example'"
+
+	def stac_search(
+		self,
+		collections: Optional[List[str]] = None,
+		bbox: Optional[List[float]] = None,
+		datetime: Optional[str] = None,
+		limit: int = 100,
+		**kwargs
+	) -> List[Dict[str, Any]]:
+		"""Search the EODMS STAC catalog using the OGC Features items endpoint.
+
+		:param collections: List of collection IDs to search
+		:param bbox: Bounding box as [west, south, east, north]
+		:param datetime: Temporal filter as ISO 8601 string or range
+		:param limit: Maximum number of items to return
+		:param kwargs: Additional search parameters (e.g. filter, filter_lang)
+		:return: List of item dictionaries
+		"""
+		available_collections = list(self.client.get_collections())
+
+		if collections is None:
+			print("Available collections and queryables:")
+			for collection in available_collections:
+				print(f"  - {collection.id}")
+				try:
+					queryables = collection.get_queryables()
+					properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
+					if properties:
+						for field_name, field_schema in properties.items():
+							field_type = "unknown"
+							if isinstance(field_schema, dict):
+								field_type = field_schema.get("type", "unknown")
+							example_expr = Search_API.build_cql2_example(field_name, field_schema)
+							print(f"      * {field_name} ({field_type}) e.g. {example_expr}")
+					else:
+						print("      * No queryable properties returned")
+				except Exception as e:
+					print(f"      * Queryables not available: {e}")
+			return []
+
+		search_params: Dict[str, Any] = {'limit': limit}
+		if bbox:
+			search_params['bbox'] = bbox
+		if datetime:
+			search_params['datetime'] = datetime
+		search_params.update(kwargs)
+
+		try:
+			items: List[Dict[str, Any]] = []
+			print(f"Searching for up to {limit} items...")
+
+			for collection_id in collections:
+				if len(items) >= limit:
+					break
+
+				collection = self.client.get_collection(collection_id)
+				if collection is None:
+					print(f"Collection not found: {collection_id}")
+					continue
+
+				remaining = limit - len(items)
+				item_search = ItemSearch(
+					url=collection.get_single_link('items').href,
+					method='GET',
+					client=self.client,
+					max_items=remaining,
+					**search_params,
+				)
+
+				print(unquote(item_search.url_with_parameters()))
+
+				for item in item_search.items_as_dicts():
+					items.append(item)
+					if len(items) >= limit:
+						break
+
+			print(f"Found {len(items)} items (limited to {limit})")
+		except Exception as e:
+			print(f"Search error: {e}")
+			return []
+
+		return items
+
+
+# Backward-compatible module-level helpers.
+def parse_filter_text(filter_text: Optional[str]):
+	return Search_API.parse_filter_text(filter_text)
+
+
+def build_cql2_example(field_name: str, field_schema: Any) -> str:
+	return Search_API.build_cql2_example(field_name, field_schema)
