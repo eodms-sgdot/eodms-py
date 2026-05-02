@@ -95,7 +95,30 @@ class Search_API:
 		return filter_text
 
 	@staticmethod
-	def build_cql2_example(field_name: str, field_schema: Any) -> str:
+	def _get_collection_example_datetime(collection: Any) -> str:
+		"""Get a representative datetime within the collection temporal extent."""
+		try:
+			coll_dict = collection.to_dict() if hasattr(collection, "to_dict") else {}
+			extent = coll_dict.get("extent", {})
+			temporal = extent.get("temporal", {})
+			intervals = temporal.get("interval", [])
+
+			for interval in intervals:
+				if not isinstance(interval, list) or len(interval) == 0:
+					continue
+				start = interval[0]
+				end = interval[1] if len(interval) > 1 else None
+				if start:
+					return start
+				if end:
+					return end
+		except Exception:
+			pass
+
+		return "2020-01-01T00:00:00Z"
+
+	@staticmethod
+	def build_cql2_example(field_name: str, field_schema: Any, collection: Any = None) -> str:
 		"""Build a simple CQL2 text example expression for a queryable field."""
 		field_type = None
 		field_format = None
@@ -108,7 +131,8 @@ class Search_API:
 		if field_type == "boolean":
 			return f"{field_name} = true"
 		if field_format == "date-time":
-			return f"{field_name} >= '2020-01-01T00:00:00Z'"
+			example_dt = Search_API._get_collection_example_datetime(collection)
+			return f"{field_name} >= '{example_dt}'"
 		if field_type == "geometry-any":
 			return f"S_INTERSECTS({field_name}, POLYGON((-100 45, -95 45, -95 50, -100 50, -100 45)))"
 		return f"{field_name} = 'example'"
@@ -144,7 +168,7 @@ class Search_API:
 							field_type = "unknown"
 							if isinstance(field_schema, dict):
 								field_type = field_schema.get("type", "unknown")
-							example_expr = Search_API.build_cql2_example(field_name, field_schema)
+							example_expr = Search_API.build_cql2_example(field_name, field_schema, collection)
 							print(f"      * {field_name} ({field_type}) e.g. {example_expr}")
 					else:
 						print("      * No queryable properties returned")
