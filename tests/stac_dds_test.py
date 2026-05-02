@@ -1,14 +1,35 @@
 from eodms_dds import dds, aaa, config
 from pystac_client import Client, ItemSearch
+from pystac_client.stac_api_io import StacApiIO
 from typing import Optional, List, Dict, Any
 import json
 import click
 import os
-import ssl
-import requests
-from requests.packages import urllib3
 from urllib.parse import unquote
-from urllib.parse import urlparse, parse_qs
+
+
+def build_stac_client(aaa_api=None, environment='prod'):
+    """Build an authenticated pystac-client configured for the target environment."""
+    domain_config = config.get_domain_config(environment)
+    domain = domain_config['domain']
+    search_endpoint = f"{domain}/search"
+    verify_ssl = domain_config.get('verify_ssl', True)
+
+    stac_api_io = StacApiIO()
+    stac_api_io.session.verify = verify_ssl
+
+    if aaa_api:
+        access_token = aaa_api.get_access_token()
+        if not access_token:
+            raise RuntimeError("Authentication failed - no access token available")
+        stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
+        print(f"Using authenticated catalog: {search_endpoint}")
+    else:
+        print(f"Using unauthenticated catalog: {search_endpoint}")
+
+    client = Client.open(search_endpoint, stac_io=stac_api_io)
+    client.add_conforms_to("FILTER")
+    return client
 
 
 def search(aaa_api=None, environment='prod', 
@@ -29,43 +50,36 @@ def search(aaa_api=None, environment='prod',
     :return: List of item dictionaries
     """
     
-    domain_config = config.get_domain_config(environment)
-    domain = domain_config['domain']
-    search_endpoint = f"{domain}/search"
-    verify_ssl = domain_config.get('verify_ssl', True)
+    try:
+        client = build_stac_client(aaa_api=aaa_api, environment=environment)
+    except RuntimeError as e:
+        print(str(e))
+        return []
     
-    # Create a custom session with verify setting
-    session = requests.Session()
-    session.verify = verify_ssl
-    
-    # Prepare headers with authentication if available
-    headers = {}
-    if aaa_api:
-        access_token = aaa_api.get_access_token()
-        if not access_token:
-            print("Authentication failed - no access token available")
-            return []
-        headers = {"Authorization": f"Bearer {access_token}"}
-        print(f"Using authenticated catalog: {search_endpoint}")
-    else:
-        print(f"Using unauthenticated catalog: {search_endpoint}")
-    
-    # Open client with custom session
-    if environment == 'staging':
-        client = Client.open(
-            search_endpoint, 
-            headers=headers if headers else None,
-            request_modifier=lambda request: setattr(session, 'verify', verify_ssl) or request
-        )
-        client._stac_io.session = session
-    else:
-        client = Client.open(search_endpoint, headers=headers if headers else None)
-    
-    # Print available collections
-    print("Available collections:")
-    for collection in client.get_collections():
+    available_collections = list(client.get_collections())
+
+    # Print available collections and per-collection queryables
+    print("Available collections and queryables:")
+    for collection in available_collections:
         print(f"  - {collection.id}")
+        try:
+            
+            queryables = collection.get_queryables()
+            properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
+            if properties:
+                for field_name in properties.keys():
+                    print(f"      * {field_name}")
+            else:
+                print("      * No queryable properties returned")
+        except Exception as e:
+            print(f"      * Queryables not available: {e}")
     print()
+
+
+    if not collections:
+        print("No collections specified, searching all available collections.")
+        return []
+    
 
     # Build search parameters
     search_params = {}
@@ -87,7 +101,7 @@ def search(aaa_api=None, environment='prod',
         
         print(f"Searching for up to {limit} items...")
 
-        collection_ids = collections or [collection.id for collection in client.get_collections()]
+        collection_ids = collections or [collection.id for collection in available_collections]
         for collection_id in collection_ids:
             if len(items) >= limit:
                 break
@@ -174,8 +188,6 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
 
     if items is not None and output:
         save_items_geojson(items, output)
-
-    
     
     if items and len(items) > 0 and eodms_user and eodms_pwd:
         uuid = items[0].get('id')
@@ -188,7 +200,7 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
 @click.option('--username', '-u', required=False, help='The EODMS username.')
 @click.option('--password', '-p', required=False, help='The EODMS password.')
-@click.option('--collection', '-c', required=True, help='The collection name.')
+@click.option('--collection', '-c', required=False, help='The collection name.')
 @click.option('--uuid', required=False, default=None, help='The UUID of the image to download (skips search).')
 @click.option('--datetime', '-d', required=False, default=None,
               help='Temporal filter as ISO 8601 string or range (e.g., "2023-01-01/2023-12-31").')
