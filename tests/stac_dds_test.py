@@ -45,6 +45,25 @@ def parse_filter_text(filter_text: Optional[str]):
     return filter_text
 
 
+def build_cql2_example(field_name: str, field_schema: Any) -> str:
+    """Build a simple CQL2 text example expression for a queryable field."""
+    field_type = None
+    field_format = None
+    if isinstance(field_schema, dict):
+        field_type = field_schema.get("type")
+        field_format = field_schema.get("format")
+
+    if field_type in ("number", "integer"):
+        return f"{field_name} = 1"
+    if field_type == "boolean":
+        return f"{field_name} = true"
+    if field_format == "date-time":
+        return f"{field_name} >= '2020-01-01T00:00:00Z'"
+    if field_type == "geometry-any":
+        return f"S_INTERSECTS({field_name}, POLYGON((-100 45, -95 45, -95 50, -100 50, -100 45)))"
+    return f"{field_name} = 'example'"
+
+
 def search(aaa_api=None, environment='prod', 
                 collections: Optional[List[str]] = None,
                 bbox: Optional[List[float]] = None,
@@ -87,7 +106,8 @@ def search(aaa_api=None, environment='prod',
                         field_type = "unknown"
                         if isinstance(field_schema, dict):
                             field_type = field_schema.get("type", "unknown")
-                        print(f"      * {field_name} ({field_type})")
+                        example_expr = build_cql2_example(field_name, field_schema)
+                        print(f"      * {field_name} ({field_type}) e.g. {example_expr}")
                 else:
                     print("      * No queryable properties returned")
             except Exception as e:
