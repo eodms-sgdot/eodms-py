@@ -67,8 +67,11 @@ def search(aaa_api=None, environment='prod',
             queryables = collection.get_queryables()
             properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
             if properties:
-                for field_name in properties.keys():
-                    print(f"      * {field_name}")
+                for field_name, field_schema in properties.items():
+                    field_type = "unknown"
+                    if isinstance(field_schema, dict):
+                        field_type = field_schema.get("type", "unknown")
+                    print(f"      * {field_name} ({field_type})")
             else:
                 print("      * No queryable properties returned")
         except Exception as e:
@@ -76,8 +79,8 @@ def search(aaa_api=None, environment='prod',
     print()
 
 
-    if not collections:
-        print("No collections specified, searching all available collections.")
+    if collections is None:
+        print("No collections specified, bailing after listing available collections.")
         return []
     
 
@@ -180,7 +183,7 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
     items = search(
         aaa_api=aaa_api,
         environment=env,
-        collections=[collection],
+        collections=[collection] if collection else None,
         datetime=datetime_range,
         bbox=bbox,
         limit=limit
@@ -200,7 +203,7 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
 @click.option('--username', '-u', required=False, help='The EODMS username.')
 @click.option('--password', '-p', required=False, help='The EODMS password.')
-@click.option('--collection', '-c', required=False, help='The collection name.')
+@click.option('--collection', '-c', required=False, help='The collection name.', default=None)
 @click.option('--uuid', required=False, default=None, help='The UUID of the image to download (skips search).')
 @click.option('--datetime', '-d', required=False, default=None,
               help='Temporal filter as ISO 8601 string or range (e.g., "2023-01-01/2023-12-31").')
