@@ -45,6 +45,7 @@ class Search_API:
 			"and", "or", "not", "in", "between", "like", "ilike", "is", "null", "true", "false",
 			"s_intersects", "s_contains", "s_within", "s_overlaps", "s_touches", "s_crosses", "s_disjoint",
 			"t_before", "t_after", "t_intersects", "a_contains", "a_overlaps",
+			"date",
 			"point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection",
 		}
 
@@ -132,7 +133,8 @@ class Search_API:
 			return f"{field_name} = true"
 		if field_format == "date-time":
 			example_dt = Search_API._get_collection_example_datetime(collection)
-			return f"{field_name} >= '{example_dt}'"
+			example_date = str(example_dt).split("T")[0]
+			return f"{field_name} >= DATE('{example_date}')"
 		if field_type == "geometry-any":
 			return f"S_INTERSECTS({field_name}, POLYGON((-100 45, -95 45, -95 50, -100 50, -100 45)))"
 		return f"{field_name} = 'example'"
@@ -143,6 +145,7 @@ class Search_API:
 		bbox: Optional[List[float]] = None,
 		datetime: Optional[str] = None,
 		limit: int = 100,
+		sortby: Optional[Any] = None,
 		**kwargs
 	) -> List[Dict[str, Any]]:
 		"""Search the EODMS STAC catalog using the OGC Features items endpoint.
@@ -151,6 +154,7 @@ class Search_API:
 		:param bbox: Bounding box as [west, south, east, north]
 		:param datetime: Temporal filter as ISO 8601 string or range
 		:param limit: Maximum number of items to return
+		:param sortby: Ignored (server-side sortby is not supported by this deployment)
 		:param kwargs: Additional search parameters (e.g. filter, filter_lang)
 		:return: List of item dictionaries
 		"""
@@ -181,6 +185,12 @@ class Search_API:
 			search_params['bbox'] = bbox
 		if datetime:
 			search_params['datetime'] = datetime
+
+		# Server does not support STAC sort extension; ignore any sortby requests.
+		if sortby is not None or 'sortby' in kwargs:
+			print("sortby is not supported by this server and will be ignored.")
+		kwargs.pop('sortby', None)
+
 		search_params.update(kwargs)
 
 		try:
