@@ -197,6 +197,7 @@ class Search_API:
 			items: List[Dict[str, Any]] = []
 			print(f"Searching for up to {limit} items...")
 			filter_text = kwargs.get('filter')
+			page_count = 0
 
 			for collection_id in collections:
 				if len(items) >= limit:
@@ -233,8 +234,17 @@ class Search_API:
 
 				print(unquote(item_search.url_with_parameters()))
 
-				for item in item_search.items_as_dicts():
-					items.append(item)
+				for page in item_search.pages_as_dicts():
+					page_count += 1
+					page_items = page.get('features', [])
+					print(
+						f"Fetched page {page_count} for {collection_id}: "
+						f"{len(page_items)} items ({len(items)} collected so far)"
+					)
+					for item in page_items:
+						items.append(item)
+						if len(items) >= limit:
+							break
 					if len(items) >= limit:
 						break
 
