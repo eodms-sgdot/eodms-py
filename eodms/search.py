@@ -43,7 +43,7 @@ class Search_API:
 
 		func_names = {
 			"and", "or", "not", "in", "between", "like", "ilike", "is", "null", "true", "false",
-			"s_intersects", "s_contains", "s_within", "s_overlaps", "s_touches", "s_crosses", "s_disjoint",
+			"s_intersect", "s_intersects", "s_contains", "s_within", "s_overlaps", "s_touches", "s_crosses", "s_disjoint",
 			"t_before", "t_after", "t_intersects", "a_contains", "a_overlaps",
 			"date",
 			"point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection",
@@ -94,6 +94,45 @@ class Search_API:
 		filter_text = re.sub(r"\s+", " ", filter_text).strip()
 
 		return filter_text
+
+	@staticmethod
+	def build_spatial_filter_expression(
+		geometry_wkt: Optional[str],
+		geometry_field: str = "geometry",
+		spatial_op: str = "S_INTERSECTS",
+	) -> Optional[str]:
+		"""Build a CQL2 spatial expression from a WKT geometry string."""
+		if not geometry_wkt:
+			return None
+
+		geometry_wkt = geometry_wkt.strip()
+		if not geometry_wkt:
+			return None
+
+		op = (spatial_op or "S_INTERSECTS").strip().upper()
+		# Gracefully normalize the common singular alias to server-supported plural form.
+		if op == "S_INTERSECT":
+			op = "S_INTERSECTS"
+
+		return f"{op}({geometry_field}, {geometry_wkt})"
+
+	@staticmethod
+	def compose_filter(
+		filter_text: Optional[str] = None,
+		geometry_wkt: Optional[str] = None,
+		geometry_field: str = "geometry",
+	) -> Optional[str]:
+		"""Compose a normalized CQL2 filter, optionally adding a spatial predicate."""
+		base_filter = Search_API.parse_filter_text(filter_text)
+		spatial_filter = Search_API.build_spatial_filter_expression(
+			geometry_wkt=geometry_wkt,
+			geometry_field=geometry_field,
+		)
+
+		if base_filter and spatial_filter:
+			return f"({base_filter}) AND {spatial_filter}"
+
+		return base_filter or spatial_filter
 
 	@staticmethod
 	def _get_collection_example_datetime(collection: Any) -> str:
@@ -259,6 +298,22 @@ class Search_API:
 # Backward-compatible module-level helpers.
 def parse_filter_text(filter_text: Optional[str]):
 	return Search_API.parse_filter_text(filter_text)
+
+
+def build_spatial_filter_expression(
+	geometry_wkt: Optional[str],
+	geometry_field: str = "geometry",
+	spatial_op: str = "S_INTERSECTS",
+) -> Optional[str]:
+	return Search_API.build_spatial_filter_expression(geometry_wkt, geometry_field, spatial_op)
+
+
+def compose_filter(
+	filter_text: Optional[str] = None,
+	geometry_wkt: Optional[str] = None,
+	geometry_field: str = "geometry",
+) -> Optional[str]:
+	return Search_API.compose_filter(filter_text, geometry_wkt, geometry_field)
 
 
 def build_cql2_example(field_name: str, field_schema: Any) -> str:
