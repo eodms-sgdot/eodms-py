@@ -169,6 +169,10 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
     \b
     # Test mode: download first feature from all collections
     python stac_dds_test.py -u USER -p PASS --test
+
+    \b
+    # Specify product type filter along with output results
+    python stac_dds_test.py -u USER -p PASS -c RCMImageProducts -d "2026-01-01/2026-05-05" -f "product:type = 'MLC'" --output results.geojson
     """
     
     # Parse bbox string to list of floats
