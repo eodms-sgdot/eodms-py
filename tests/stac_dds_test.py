@@ -4,14 +4,16 @@ import json
 import os
 import click
 
-def download(dds_api, collection, item_uuid, out_folder):
+def download(dds_api, collection, feature_id, out_folder):
 
-    item_info = dds_api.get_item(collection, item_uuid)
+    item_info = dds_api.get_item(collection, feature_id)
 
     if item_info is None:
+        print(f"Item not found: Collection={collection}, Feature ID={feature_id}")
         return None
 
     if 'download_url' not in item_info.keys():
+        print(f"No download URL found for item: Collection={collection}, Feature ID={feature_id} item_info={item_info}")
         return None
 
     dds_api.download_item(os.path.abspath(out_folder))
@@ -38,10 +40,58 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
 
     dds_api = dds.DDS_API(aaa_api, env)
 
-    # If UUID is provided, skip search and download directly
-    if uuid:
-        print(f"Downloading image with UUID: {uuid}")
-        download(dds_api, collection, uuid, out_folder)
+    # If test mode is enabled, cycle through all collections and download first feature from each
+    if test:
+        skipped_collections = []
+        print("#### TEST MODE: Downloading first feature from specificied collections ####\n")
+
+        if collection is not None:
+            collections_list = [{'id': collection}]
+        else:
+            # Get all collections
+            collections_list = search(aaa_api=aaa_api, environment=env, collection=None)
+        
+        for coll_dict in collections_list:
+            coll_id = coll_dict.get('id')
+
+            # Skip certain collection prefixes
+            if coll_id.startswith(('aaa')):
+                skipped_collections.append(coll_id)
+                continue
+            
+            # Search for first feature in this collection
+            items = search(
+                aaa_api=aaa_api,
+                environment=env,
+                collection=coll_id,
+                datetime=datetime_range,
+                bbox=bbox,
+                limit=1
+            )
+            
+            if items and len(items) > 0:
+                first_feature_id = None
+                for item in items:
+                    item_id = item.get('id')
+                    if item_id:
+                        first_feature_id = item_id
+                        break
+                
+                if first_feature_id:         
+                    download(dds_api, coll_id, first_feature_id, out_folder)
+                else:
+                    print(f"  No valid feature ID found in {coll_id}")
+            else:
+                print(f"  No features found in {coll_id}")
+        
+        print("\nTest mode completed.")
+        print(f"Skipped collections: {', '.join(skipped_collections)}")
+        return
+
+    # If feature_id is provided, skip search and download directly
+    if feature_id:
+        print(f"Downloading image with feature ID: {feature_id}")
+        download(dds_api, collection, feature_id, out_folder)
         return
 
     parsed_filter = search.parse_filter_text(filter_text)
@@ -77,7 +127,7 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
               help='Temporal filter as ISO 8601 string or range (e.g., "2023-01-01/2023-12-31").')
 @click.option('--bbox', '-b', required=False, default=None,
               help='Bounding box as comma-separated values: west,south,east,north (e.g., "-100,45,-95,50").')
-@click.option('--limit', '-l', required=False, default=1000, type=int,
+@click.option('--limit', '-l', required=False, default=None, type=int,
               help='Maximum number of items to fetch from search (default: 1000).')
 @click.option('--filter', '-f', 'filter_text', required=False, default=None,
               help="CQL2 text filter expression (e.g., roll_number = 'KA3').")
@@ -115,6 +165,10 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
     \b
     # Specify output folder
     python stac_dds_test.py -u USER -p PASS -c RCMImageProducts -o ./downloads
+    
+    \b
+    # Test mode: download first feature from all collections
+    python stac_dds_test.py -u USER -p PASS --test
     """
     
     # Parse bbox string to list of floats

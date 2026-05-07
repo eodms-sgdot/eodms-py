@@ -155,8 +155,9 @@ class AAA_Creds():
         self.refresh_exp = datetime.fromisoformat(refresh_exp_str) \
                             if refresh_exp_str is not None else datetime.now()
 
-        self.logger.info(f"Access Expiration: {self.access_exp}")
-        self.logger.info(f"Refresh Expiration: {self.refresh_exp}")
+
+        # self.logger.info(f"Access Expiration: {self.access_exp}")
+        # self.logger.info(f"Refresh Expiration: {self.refresh_exp}")
 
 class AAA_API():
 
