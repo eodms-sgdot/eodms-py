@@ -1,6 +1,6 @@
 # This is a basic workflow to help you get started with Actions
 
-name: py-eodms-dds Version Check
+name: eodms-py Version Check
 
 # Controls when the workflow will run
 on:
@@ -33,10 +33,10 @@ jobs:
           sudo pip install py-eodms-rapi -U
 
       # Runs a single command using the runners shell
-      - name: Run py-eodms-dds Version Check
+      - name: Run eodms-py Version Check
         # continue-on-error: true
         run: |
           python setup.py --version
           python -c 'from setuptools.config.setupcfg import read_configuration as c; print(c("setup.cfg")["metadata"]["version"])'
-          python -c 'from eodms_dds import __version__; print(__version__)'
+          python -c 'from eodms import __version__; print(__version__)'
           

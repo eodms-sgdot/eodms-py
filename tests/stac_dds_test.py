@@ -1,96 +1,8 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from eodms_dds import dds, aaa, config
-from pystac_client import Client
+from eodms import dds, aaa, search
 from typing import Optional, List, Dict, Any
-# import json
-import click
+import json
 import os
-import ssl
-import requests
-from requests.packages import urllib3
-from urllib.parse import unquote
-from urllib.parse import urlparse, parse_qs
-
-def search(aaa_api=None, environment='prod', 
-                collection = None,
-                bbox: Optional[List[float]] = None,
-                datetime: Optional[str] = None,
-                limit = 100,
-                **kwargs) -> List[Dict[str, Any]]:
-    """
-    Search the EODMS STAC catalog using pystac_client.
-    
-    :param aaa_api: Optional AAA_API instance for authentication
-    :param environment: Environment to use ('prod' or 'staging')
-    :param collection: Collection ID to search
-    :param bbox: Bounding box as [west, south, east, north]
-    :param datetime: Temporal filter as ISO 8601 string or range
-    :param kwargs: Additional search parameters
-    :return: List of item dictionaries
-    """
-    
-    domain_config = config.get_domain_config(environment)
-    domain = domain_config['domain']
-    search_endpoint = f"{domain}/search"
-    verify_ssl = domain_config.get('verify_ssl', True)
-    
-    # Create a custom session with verify setting
-    session = requests.Session()
-    session.verify = verify_ssl
-    
-    # Prepare headers with authentication if available
-    headers = None
-    if aaa_api:
-        access_token = aaa_api.get_access_token()
-        if not access_token:
-            print("Authentication failed - no access token available")
-            return []
-        headers = {"Authorization": f"Bearer {access_token}"}
-        catalog = Client.open(search_endpoint, headers=headers)
-    else:
-        catalog = Client.open(search_endpoint)
-    
-    # If no search parameters, just list collections
-    if collection is None:
-        try:
-            print("STAC Collections:")
-            collections_list = []
-            for collection in catalog.get_collections():
-                coll_dict = collection.to_dict()
-                collections_list.append(coll_dict)
-                print(f"  - {coll_dict.get('id')}")
-            return collections_list
-        except Exception as e:
-            print(f"Error listing collections: {e}")
-            return []
-    
-    # Execute search
-    try:
-        items = []
-
-        search = catalog.search(
-            collections=[collection],
-            bbox=bbox,
-            datetime=datetime,
-            limit=100,
-            method='GET'
-        )
-        search_results = search.item_collection()
-        
-        # Convert to list of dictionaries
-        if search_results:
-            items = [item.to_dict() for item in search_results if item is not None]
-            print(f"{collection}: {len(items)} results")
-        else:
-            print(f"{collection}: No results found")
-
-    except Exception as e:
-        print(f"Search error: {e}")
-        return []
-    
-    return items
+import click
 
 def download(dds_api, collection, feature_id, out_folder):
 
@@ -108,7 +20,20 @@ def download(dds_api, collection, feature_id, out_folder):
 
     return item_info
 
-def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None, bbox=None, feature_id=None, limit=100, test=False):
+
+def save_items_geojson(items: List[Dict[str, Any]], output_file: str):
+    """Save item dictionaries as a GeoJSON FeatureCollection."""
+    feature_collection = {
+        "type": "FeatureCollection",
+        "features": items or [],
+    }
+
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(feature_collection, f, indent=2)
+
+    print(f"Saved {len(feature_collection['features'])} items to {output_file}")
+
+def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None, bbox=None, uuid=None, limit=100, output=None, filter_text=None):
 
     # Create shared AAA instance
     aaa_api = aaa.AAA_API(eodms_user, eodms_pwd, env) if eodms_user and eodms_pwd else None
@@ -169,34 +94,49 @@ def run(eodms_user, eodms_pwd, collection, env, out_folder, datetime_range=None,
         download(dds_api, collection, feature_id, out_folder)
         return
 
+    parsed_filter = search.parse_filter_text(filter_text)
+
     # Search using pystac_client with shared AAA instance
-    items = search(
-        aaa_api=aaa_api,
-        environment=env,
-        collection=collection,
+    search_api = search.Search_API(aaa_api, env)
+    items = search_api.stac_search(
+        collections=[collection] if collection else None,
         datetime=datetime_range,
         bbox=bbox,
-        limit=limit
+        limit=limit,
+        filter=parsed_filter,
+        filter_lang='cql2-text' if parsed_filter else None,
     )
+
+    if items is not None and output:
+        save_items_geojson(items, output)
     
+    if items and len(items) > 0 and eodms_user and eodms_pwd:
+        uuid = items[0].get('id')
+        print(f"Downloading the first image (UUID: {uuid}) from the list")
+        download(dds_api, collection, uuid, out_folder)
+    elif items and len(items) > 0:
+        print("No credentials provided, skipping download.")
+
 
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
 @click.option('--username', '-u', required=False, help='The EODMS username.')
 @click.option('--password', '-p', required=False, help='The EODMS password.')
-@click.option('--collection', '-c', required=False, default=None, help='The collection name.')
-@click.option('--feature_id', '-f', required=False, default=None, help='The feature (item) ID to download (skips search).')
+@click.option('--collection', '-c', required=False, help='The collection name.', default=None)
+@click.option('--uuid', required=False, default=None, help='The UUID of the image to download (skips search).')
 @click.option('--datetime', '-d', required=False, default=None,
               help='Temporal filter as ISO 8601 string or range (e.g., "2023-01-01/2023-12-31").')
 @click.option('--bbox', '-b', required=False, default=None,
               help='Bounding box as comma-separated values: west,south,east,north (e.g., "-100,45,-95,50").')
 @click.option('--limit', '-l', required=False, default=None, type=int,
               help='Maximum number of items to fetch from search (default: 1000).')
+@click.option('--filter', '-f', 'filter_text', required=False, default=None,
+              help="CQL2 text filter expression (e.g., roll_number = 'KA3').")
+@click.option('--output', required=False, default=None,
+              help='Output GeoJSON filename (e.g., results.geojson).')
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--out_folder', '-o', required=False, default='.',
               help='The output folder.')
-@click.option('--test', is_flag=True, default=False,
-              help='Test mode: cycle through all collections and download the first feature from each.')
-def cli(username, password, collection, feature_id, datetime, bbox, limit, env, out_folder, test):
+def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, output, env, out_folder):
     """
     Search and Download images from EODMS STAC catalog and DDS.
     
@@ -242,7 +182,7 @@ def cli(username, password, collection, feature_id, datetime, bbox, limit, env, 
             click.echo(f"Error parsing bbox: {e}", err=True)
             return
 
-    run(username, password, collection, env, out_folder, datetime, bbox_list, feature_id, limit, test)
+    run(username, password, collection, env, out_folder, datetime, bbox_list, uuid, limit, output, filter_text)
 
 if __name__ == '__main__':
     cli()

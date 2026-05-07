@@ -11,7 +11,7 @@ from .__version__ import __version__
 from . import config
 
 class AAA_Creds():
-
+    """Authentication Authorization and Accounting (AAA) credentials management class."""
     def __init__(self):
 
         self.access_token = None
@@ -321,7 +321,7 @@ class AAA_API():
             err_json = resp.json()
             error = err_json.get('error')
             msg = err_json.get('message')
-            self.logger.warning(f"WARNING: Failed to log in using "
+            self.logger.warning(f"WARNING: Login failed for user {self.username} using "
                   f"AAA API: {error}: {msg}")
             self.login_success = False
 

@@ -12,14 +12,15 @@ from . import api_logger
 from . import config
 
 class DDS_API():
-
+    """Client for the EODMS Data Delivery Service (DDS) API."""
+    
     def __init__(self, aaa_api, environment='prod'):
         domain_config = config.get_domain_config(environment)
         self.domain = domain_config['domain']
         self.verify_ssl = domain_config.get('verify_ssl', True)
         self.img_info = None
 
-        self.logger = api_logger.EODMSLogger('eodms_dds', api_logger.eodms_logger)
+        self.logger = api_logger.EODMSLogger('eodms_logger', api_logger.eodms_logger)
 
         # self.logger.debug((f"ssl.get_server_certificate(): {ssl.get_server_certificate(self.domain)}"))
 

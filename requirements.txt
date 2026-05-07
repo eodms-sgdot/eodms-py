@@ -1,4 +1,4 @@
 requests>=2.23.0
 tqdm>=4.59.0
 dateparser>=1.0.0
-py-eodms-dds
+pystac-client>=0.7.0
