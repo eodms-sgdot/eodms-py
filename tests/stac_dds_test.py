@@ -4,8 +4,10 @@ import json
 import os
 import click
 
-def download(dds_api, collection, item_uuid, out_folder):
+def download(dds_api, collection, item_uuid, download_dir):
 
+    item_info = dds_api.get_item(collection, item_uuid)
+    
     if item_info is None:
         print(f"Item not found: Collection={collection}, Feature ID={item_uuid}")
         return None
@@ -14,7 +16,7 @@ def download(dds_api, collection, item_uuid, out_folder):
         print(f"No download URL found for item: Collection={collection}, Feature ID={item_uuid} item_info={item_info}")
         return None
 
-    dds_api.download_item(os.path.abspath(out_folder))
+    dds_api.download_item(os.path.abspath(download_dir))
 
     return item_info
 
@@ -36,7 +38,7 @@ def run(
     eodms_pwd,
     collection,
     env,
-    out_folder,
+    download_dir,
     datetime_range=None,
     bbox=None,
     uuid=None,
@@ -53,7 +55,7 @@ def run(
     # If UUID is provided, skip search and download directly
     if uuid:
         print(f"Downloading image with UUID: {uuid}")
-        download(dds_api, collection, uuid, out_folder)
+        download(dds_api, collection, uuid, download_dir)
         return
 
     parsed_filter = search.compose_filter(filter_text=filter_text, geometry_wkt=s_intersect)
@@ -72,13 +74,13 @@ def run(
     if items is not None and output:
         save_items_geojson(items, output)
     else:
-        print(f"not outputiong items to geojson because output is {output}")
+        print(f"not outputing items to geojson because output is {output}")
         
     
     if items and len(items) > 0 and eodms_user and eodms_pwd:
         uuid = items[0].get('id')
         print(f"Downloading the first image (UUID: {uuid}) from the list")
-        download(dds_api, collection, uuid, out_folder)
+        download(dds_api, collection, uuid, download_dir)
     elif items and len(items) > 0:
         print("No credentials provided, skipping download.")
 
@@ -98,12 +100,12 @@ def run(
               help="CQL2 text filter expression (e.g., roll_number = 'KA3').")
 @click.option('--s-intersect', 's_intersect', required=False, default=None,
               help='WKT geometry used with S_INTERSECTS on geometry (e.g., "POLYGON((-100.0 45.0, -99.2 45.6, -98.3 45.4, -97.4 46.0, -96.6 45.7, -96.1 46.5, -96.8 47.2, -97.9 47.5, -99.1 47.0, -100.0 46.1, -100.0 45.0))").')
-@click.option('--output', required=False, default=None,
+@click.option('--output', '-o', required=False, default=None,
               help='Output GeoJSON filename (e.g., results.geojson).')
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
-@click.option('--out_folder', '-o', required=False, default='.',
-              help='The output folder.')
-def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, output, env, out_folder):
+@click.option('--download_dir', '-dl', required=False, default='.',
+              help='The download directory.')
+def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, output, env, download_dir):
     """
     Search and Download images from EODMS STAC catalog and DDS.
     
@@ -135,8 +137,8 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
     python stac_dds_test.py -u USER -p PASS -c RCMImageProducts --uuid 12345678-1234-1234-1234-123456789abc
     
     \b
-    # Specify output folder
-    python stac_dds_test.py -u USER -p PASS -c RCMImageProducts -o ./downloads
+    # Specify download directory
+    python stac_dds_test.py -u USER -p PASS -c RCMImageProducts -dl ./downloads
 
     \b
     # Specify product type filter along with output results
@@ -159,7 +161,7 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
         password,
         collection,
         env,
-        out_folder,
+        download_dir,
         datetime,
         bbox_list,
         uuid,
