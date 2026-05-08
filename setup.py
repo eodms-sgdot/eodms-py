@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name='eodms-py',
-    version='0.4.0', 
+    version='0.5.0', 
     author='Kevin Ballantyne (Natural Resources Canada)',
     author_email='kevin.ballantyne@nrcan-rncan.gc.ca',
     packages=find_packages(),
