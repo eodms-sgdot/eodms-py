@@ -1,8 +1,15 @@
-from eodms import dds, aaa, search
-from typing import Optional, List, Dict, Any
 import json
 import os
+import sys
+from typing import Optional, List, Dict, Any
 import click
+
+# Allow running this script directly from the tests directory.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from eodms import dds, aaa, search
 
 def download(dds_api, collection, item_uuid, download_dir):
 
@@ -33,6 +40,71 @@ def save_items_geojson(items: List[Dict[str, Any]], output_file: str):
 
     print(f"Saved {len(feature_collection['features'])} items to {output_file}")
 
+
+def parse_aoi_geojson(aoi_file: str) -> List[str]:
+    """
+    Parse GeoJSON AOI file and extract polygon geometries as WKT strings.
+    
+    Args:
+        aoi_file: Path to GeoJSON file containing 1-5 polygons.
+        
+    Returns:
+        List of WKT polygon strings.
+        
+    Raises:
+        ValueError: If polygons are not valid or count is outside 1-5 range.
+    """
+    try:
+        with open(aoi_file, 'r', encoding='utf-8') as f:
+            geojson_data = json.load(f)
+    except FileNotFoundError:
+        raise ValueError(f"AOI file not found: {aoi_file}")
+    except json.JSONDecodeError:
+        raise ValueError(f"AOI file is not valid JSON: {aoi_file}")
+    
+    polygons = []
+    
+    # Extract features from FeatureCollection or use feature directly
+    if geojson_data.get('type') == 'FeatureCollection':
+        features = geojson_data.get('features', [])
+    elif geojson_data.get('type') == 'Feature':
+        features = [geojson_data]
+    else:
+        features = []
+    
+    # Extract polygon geometries
+    for feature in features:
+        geometry = feature.get('geometry', {})
+        if geometry.get('type') == 'Polygon':
+            polygons.append(geometry)
+        elif geometry.get('type') == 'MultiPolygon':
+            # Flatten MultiPolygon into individual polygons
+            for poly in geometry.get('coordinates', []):
+                polygons.append({'type': 'Polygon', 'coordinates': [poly]})
+    
+    if not polygons:
+        raise ValueError("No polygons found in AOI GeoJSON file.")
+    
+    if len(polygons) > 5:
+        raise ValueError(f"AOI file contains {len(polygons)} polygons; maximum is 5.")
+    
+    # Convert GeoJSON polygons to WKT format
+    wkt_polygons = []
+    for polygon in polygons:
+        coords = polygon.get('coordinates', [])
+        if not coords:
+            raise ValueError("Polygon has no coordinates.")
+        
+        # coords[0] is the outer ring (lon, lat) pairs
+        ring = coords[0]
+        # Convert to WKT: POLYGON((lon lat, lon lat, ...))
+        wkt_coords = ', '.join(f"{lon} {lat}" for lon, lat in ring)
+        wkt = f"POLYGON(({wkt_coords}))"
+        wkt_polygons.append(wkt)
+    
+    print(f"Loaded {len(wkt_polygons)} polygon(s) from AOI file.")
+    return wkt_polygons
+
 def run(
     eodms_user,
     eodms_pwd,
@@ -46,6 +118,7 @@ def run(
     output=None,
     filter_text=None,
     s_intersect=None,
+    aoi=None,
 ):
     # Create shared AAA instance
     aaa_api = aaa.AAA_API(eodms_user, eodms_pwd, env) if eodms_user and eodms_pwd else None
@@ -58,18 +131,47 @@ def run(
         download(dds_api, collection, uuid, download_dir)
         return
 
-    parsed_filter = search.compose_filter(filter_text=filter_text, geometry_wkt=s_intersect)
-
+    # Build list of s_intersect geometries to search
+    s_intersect_list = []
+    if aoi:
+        try:
+            s_intersect_list = parse_aoi_geojson(aoi)
+        except ValueError as e:
+            print(f"Error parsing AOI file: {e}")
+            return
+    elif s_intersect:
+        s_intersect_list = [s_intersect]
+    
+    # If no geometry specified, do a single search without geometry
+    if not s_intersect_list:
+        s_intersect_list = [None]
+    
     # Search using pystac_client with shared AAA instance
     search_api = search.Search_API(aaa_api, env)
-    items = search_api.stac_search(
-        collections=[collection] if collection else None,
-        datetime=datetime_range,
-        bbox=bbox,
-        limit=limit,
-        filter=parsed_filter,
-        filter_lang='cql2-text' if parsed_filter else None,
-    )
+    all_items = []
+    seen_ids = set()
+    
+    for geometry_wkt in s_intersect_list:
+        parsed_filter = search.compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
+        
+        items = search_api.stac_search(
+            collections=[collection] if collection else None,
+            datetime=datetime_range,
+            bbox=bbox,
+            limit=limit,
+            filter=parsed_filter,
+            filter_lang='cql2-text' if parsed_filter else None,
+        )
+        
+        # Deduplicate items by ID
+        if items:
+            for item in items:
+                item_id = item.get('id')
+                if item_id not in seen_ids:
+                    all_items.append(item)
+                    seen_ids.add(item_id)
+    
+    items = all_items if all_items else None
 
     if items is not None and output:
         save_items_geojson(items, output)
@@ -100,12 +202,14 @@ def run(
               help="CQL2 text filter expression (e.g., roll_number = 'KA3').")
 @click.option('--s-intersect', 's_intersect', required=False, default=None,
               help='WKT geometry used with S_INTERSECTS on geometry (e.g., "POLYGON((-100.0 45.0, -99.2 45.6, -98.3 45.4, -97.4 46.0, -96.6 45.7, -96.1 46.5, -96.8 47.2, -97.9 47.5, -99.1 47.0, -100.0 46.1, -100.0 45.0))").')
+@click.option('--aoi', required=False, default=None, type=click.Path(exists=True),
+              help='GeoJSON file with 1-5 polygon(s) to search for (e.g., aoi.geojson).')
 @click.option('--output', '-o', required=False, default=None,
               help='Output GeoJSON filename (e.g., results.geojson).')
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--download_dir', '-dl', required=False, default='.',
               help='The download directory.')
-def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, output, env, download_dir):
+def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, aoi, output, env, download_dir):
     """
     Search and Download images from EODMS STAC catalog and DDS.
     
@@ -127,6 +231,10 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
     # Search with S_INTERSECTS geometry filter
     python stac_dds_test.py -u USER -p PASS -c RCMImageProducts --s-intersect "POLYGON((-100.0 45.0, -99.2 45.6, -98.3 45.4, -97.4 46.0, -96.6 45.7, -96.1 46.5, -96.8 47.2, -97.9 47.5, -99.1 47.0, -100.0 46.1, -100.0 45.0))"
     
+    
+    \b
+    # Search with AOI from GeoJSON file (1-5 polygons)
+    python stac_dds_test.py -u USER -p PASS -c RCMImageProducts --aoi aoi.geojson
     
     \b
     # Search with limit
@@ -169,6 +277,7 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
         output,
         filter_text,
         s_intersect,
+        aoi,
     )
 
 if __name__ == '__main__':
