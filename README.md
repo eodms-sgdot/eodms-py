@@ -43,16 +43,15 @@ dds_api.download_item(out_folder)
 The `Search_API` class provides helpers for searching the EODMS STAC catalog using [pystac-client](https://pystac-client.readthedocs.io/).
 
 ```python
-from eodms import aaa, dds, search
+from eodms import aaa, search
 
 aaa_api = aaa.AAA_API('myeodmsusername', 'myeodmspassword')
 
-# Build an authenticated pystac-client
-client = search.build_stac_client(aaa_api=aaa_api, environment='prod')
+# Build an authenticated Search_API
+search_api = search.Search_API(aaa_api=aaa_api, environment='prod')
 
-# List available collections
-for collection in client.get_collections():
-    print(collection.id)
+# List available collections and their queryable fields
+search_api.stac_search(collections=None)
 ```
 
 For a full search-and-download example see [stac_dds_test.py](./tests/stac_dds_test.py) and [features_dds_test.py](./tests/features_dds_test.py).
@@ -123,9 +122,11 @@ Options:
   -l, --limit INTEGER      Maximum number of items to fetch (default: 1000).
   -f, --filter TEXT        CQL2 text filter expression
                            (e.g., "roll_number = 'KA3'").
-      --output TEXT        Output GeoJSON filename (e.g., results.geojson).
+      --s-intersect TEXT   WKT geometry for S_INTERSECTS spatial filter.
+      --aoi PATH           GeoJSON file with 1-5 polygon(s) for spatial filter.
+  -o, --output TEXT        Output GeoJSON filename (e.g., results.geojson).
   -e, --env TEXT           Environment: "prod" (default) or "staging".
-  -o, --out_folder TEXT    Output folder (default: current folder).
+  -dl, --download_dir TEXT Download directory (default: current folder).
   -h, --help               Show this message and exit.
 ```
 
@@ -141,6 +142,12 @@ python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -d "2023-
 
 # Apply a CQL2 filter and save results as GeoJSON
 python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -f "roll_number = 'KA3'" --output results.geojson
+
+# Search with an AOI from a GeoJSON file (1-5 polygons)
+python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts --aoi tests/aoi.geojson --output results.geojson
+
+# Specify a download directory
+python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -dl ./downloads
 ```
 
 ### Run features_dds_test.py
@@ -174,6 +181,29 @@ python features_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -l 5
 
 # Download a specific feature by ID
 python features_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -f some-feature-uuid
+```
+
+### Run test_search_queryables.py
+
+Unit and integration tests for the STAC search and CQL2 filter helpers.
+
+The unit tests run offline with no credentials required. The integration tests call the live EODMS STAC catalog and are marked with `@pytest.mark.integration`.
+
+```bash
+# Run all unit tests (no network access required)
+pytest tests/test_search_queryables.py
+
+# Run a specific test by name
+pytest tests/test_search_queryables.py::test_compose_filter_combines_attribute_and_geometry_filters
+
+# Run integration tests (requires network access, no credentials needed)
+pytest tests/test_search_queryables.py -m integration
+
+# Run all tests including integration
+pytest tests/test_search_queryables.py -m "integration or not integration"
+
+# Run with verbose output
+pytest tests/test_search_queryables.py -v
 ```
 
 ## Documentation

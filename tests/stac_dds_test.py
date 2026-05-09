@@ -41,15 +41,15 @@ def save_items_geojson(items: List[Dict[str, Any]], output_file: str):
     print(f"Saved {len(feature_collection['features'])} items to {output_file}")
 
 
-def parse_aoi_geojson(aoi_file: str) -> List[str]:
+def parse_aoi_geojson(aoi_file: str) -> List[Dict[str, Any]]:
     """
-    Parse GeoJSON AOI file and extract polygon geometries as WKT strings.
+    Parse GeoJSON AOI file and extract polygon geometries with optional names.
     
     Args:
         aoi_file: Path to GeoJSON file containing 1-5 polygons.
         
     Returns:
-        List of WKT polygon strings.
+        List of geometry dicts with keys: name, wkt.
         
     Raises:
         ValueError: If polygons are not valid or count is outside 1-5 range.
@@ -74,13 +74,18 @@ def parse_aoi_geojson(aoi_file: str) -> List[str]:
     
     # Extract polygon geometries
     for feature in features:
+        props = feature.get('properties', {}) if isinstance(feature, dict) else {}
+        geometry_name = props.get('name')
         geometry = feature.get('geometry', {})
         if geometry.get('type') == 'Polygon':
-            polygons.append(geometry)
+            polygons.append({'name': geometry_name, 'geometry': geometry})
         elif geometry.get('type') == 'MultiPolygon':
             # Flatten MultiPolygon into individual polygons
-            for poly in geometry.get('coordinates', []):
-                polygons.append({'type': 'Polygon', 'coordinates': [poly]})
+            for idx, poly in enumerate(geometry.get('coordinates', []), start=1):
+                polygons.append({
+                    'name': f"{geometry_name} part {idx}" if geometry_name else None,
+                    'geometry': {'type': 'Polygon', 'coordinates': poly},
+                })
     
     if not polygons:
         raise ValueError("No polygons found in AOI GeoJSON file.")
@@ -90,7 +95,8 @@ def parse_aoi_geojson(aoi_file: str) -> List[str]:
     
     # Convert GeoJSON polygons to WKT format
     wkt_polygons = []
-    for polygon in polygons:
+    for polygon_entry in polygons:
+        polygon = polygon_entry.get('geometry', {})
         coords = polygon.get('coordinates', [])
         if not coords:
             raise ValueError("Polygon has no coordinates.")
@@ -100,7 +106,7 @@ def parse_aoi_geojson(aoi_file: str) -> List[str]:
         # Convert to WKT: POLYGON((lon lat, lon lat, ...))
         wkt_coords = ', '.join(f"{lon} {lat}" for lon, lat in ring)
         wkt = f"POLYGON(({wkt_coords}))"
-        wkt_polygons.append(wkt)
+        wkt_polygons.append({'name': polygon_entry.get('name'), 'wkt': wkt})
     
     print(f"Loaded {len(wkt_polygons)} polygon(s) from AOI file.")
     return wkt_polygons
@@ -132,7 +138,7 @@ def run(
         return
 
     # Build list of s_intersect geometries to search
-    s_intersect_list = []
+    s_intersect_list: List[Dict[str, Any]] = []
     if aoi:
         try:
             s_intersect_list = parse_aoi_geojson(aoi)
@@ -140,18 +146,23 @@ def run(
             print(f"Error parsing AOI file: {e}")
             return
     elif s_intersect:
-        s_intersect_list = [s_intersect]
+        s_intersect_list = [{'name': None, 'wkt': s_intersect}]
     
     # If no geometry specified, do a single search without geometry
     if not s_intersect_list:
-        s_intersect_list = [None]
+        s_intersect_list = [{'name': None, 'wkt': None}]
     
     # Search using pystac_client with shared AAA instance
     search_api = search.Search_API(aaa_api, env)
     all_items = []
     seen_ids = set()
     
-    for geometry_wkt in s_intersect_list:
+    for idx, geometry_entry in enumerate(s_intersect_list, start=1):
+        geometry_name = geometry_entry.get('name')
+        geometry_wkt = geometry_entry.get('wkt')
+        if geometry_wkt:
+            label = geometry_name if geometry_name else f"polygon {idx}"
+            print(f"Searching AOI geometry: {label}")
         parsed_filter = search.compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
         
         items = search_api.stac_search(
