@@ -175,9 +175,6 @@ def run(
 
     if items is not None and output:
         save_items_geojson(items, output)
-    else:
-        print(f"not outputing items to geojson because output is {output}")
-        
     
     if items and len(items) > 0 and eodms_user and eodms_pwd:
         uuid = items[0].get('id')

@@ -162,9 +162,22 @@ class Search_API:
 		"""Build a simple CQL2 text example expression for a queryable field."""
 		field_type = None
 		field_format = None
+		enum_vals = None
 		if isinstance(field_schema, dict):
 			field_type = field_schema.get("type")
 			field_format = field_schema.get("format")
+			enum_vals = field_schema.get("enum")
+
+		if isinstance(enum_vals, list) and enum_vals:
+			enum_value = enum_vals[0]
+			if isinstance(enum_value, str):
+				escaped = enum_value.replace("'", "''")
+				return f"{field_name} = '{escaped}'"
+			if isinstance(enum_value, bool):
+				return f"{field_name} = {'true' if enum_value else 'false'}"
+			if enum_value is None:
+				return f"{field_name} IS NULL"
+			return f"{field_name} = {enum_value}"
 
 		if field_type in ("number", "integer"):
 			return f"{field_name} = 1"
@@ -209,10 +222,29 @@ class Search_API:
 					if properties:
 						for field_name, field_schema in properties.items():
 							field_type = "unknown"
+							constraint_parts: List[str] = []
 							if isinstance(field_schema, dict):
 								field_type = field_schema.get("type", "unknown")
+
+								enum_vals = field_schema.get("enum")
+								if isinstance(enum_vals, list) and enum_vals:
+									max_preview = 5
+									enum_preview = ", ".join(str(v) for v in enum_vals[:max_preview])
+									if len(enum_vals) > max_preview:
+										enum_preview += ", ..."
+									constraint_parts.append(f"enum=[{enum_preview}]")
+
+								minimum = field_schema.get("minimum")
+								maximum = field_schema.get("maximum")
+								if minimum is not None or maximum is not None:
+									constraint_parts.append(f"min={minimum} max={maximum}")
+
+								pattern = field_schema.get("pattern")
+								if isinstance(pattern, str) and pattern:
+									constraint_parts.append(f"pattern={pattern}")
 							example_expr = Search_API.build_cql2_example(field_name, field_schema, collection)
-							print(f"      * {field_name} ({field_type}) e.g. {example_expr}")
+							constraints_text = f" | constraints: {'; '.join(constraint_parts)}" if constraint_parts else ""
+							print(f"      * {field_name} ({field_type}) e.g. {example_expr}{constraints_text}")
 					else:
 						print("      * No queryable properties returned")
 				except Exception as e:
