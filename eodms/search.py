@@ -157,6 +157,52 @@ class Search_API:
 
 		return "2020-01-01T00:00:00Z"
 
+
+	"""Print queryable fields for a collection, including type and any constraints like enums or numeric ranges."""
+	def print_queryables(self, collection: Any) -> None:
+		try:
+			queryables = collection.get_queryables()
+			properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
+			if properties:
+				for field_name, field_schema in properties.items():
+					field_type = "unknown"
+					constraint_parts: List[str] = []
+					if isinstance(field_schema, dict):
+						field_type = field_schema.get("type", "unknown")
+
+						enum_vals = field_schema.get("enum")
+						if isinstance(enum_vals, list) and enum_vals:
+							max_preview = 5
+							enum_preview = ", ".join(str(v) for v in enum_vals[:max_preview])
+							if len(enum_vals) > max_preview:
+								enum_preview += ", ..."
+							constraint_parts.append(f"enum=[{enum_preview}]")
+
+						minimum = field_schema.get("minimum")
+						maximum = field_schema.get("maximum")
+						if minimum is not None or maximum is not None:
+							constraint_parts.append(f"min={minimum} max={maximum}")
+
+						pattern = field_schema.get("pattern")
+						if isinstance(pattern, str) and pattern:
+							constraint_parts.append(f"pattern={pattern}")
+					example_expr = Search_API.build_cql2_example(field_name, field_schema, collection)
+					constraints_text = f" | constraints: {'; '.join(constraint_parts)}" if constraint_parts else ""
+					print(f"      * {field_name} ({field_type}) e.g. {example_expr}{constraints_text}")
+			else:
+				print("      * No queryable properties returned")
+		except Exception as e:
+			print(f"      * Queryables not available: {e}")
+
+	"""Print all available collections and their queryable fields."""
+	def print_collections(self) -> None:
+		"""Print all available collections and their queryable fields."""
+		available_collections = list(self.client.get_collections())
+		print("Available collections and queryables:")
+		for collection in available_collections:
+			self.print_queryables(collection)
+			
+
 	@staticmethod
 	def build_cql2_example(field_name: str, field_schema: Any, collection: Any = None) -> str:
 		"""Build a simple CQL2 text example expression for a queryable field."""
@@ -210,45 +256,8 @@ class Search_API:
 		:param kwargs: Additional search parameters (e.g. filter, filter_lang)
 		:return: List of item dictionaries
 		"""
-		available_collections = list(self.client.get_collections())
-
 		if collections is None:
-			print("Available collections and queryables:")
-			for collection in available_collections:
-				print(f"  - {collection.id}")
-				try:
-					queryables = collection.get_queryables()
-					properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
-					if properties:
-						for field_name, field_schema in properties.items():
-							field_type = "unknown"
-							constraint_parts: List[str] = []
-							if isinstance(field_schema, dict):
-								field_type = field_schema.get("type", "unknown")
-
-								enum_vals = field_schema.get("enum")
-								if isinstance(enum_vals, list) and enum_vals:
-									max_preview = 5
-									enum_preview = ", ".join(str(v) for v in enum_vals[:max_preview])
-									if len(enum_vals) > max_preview:
-										enum_preview += ", ..."
-									constraint_parts.append(f"enum=[{enum_preview}]")
-
-								minimum = field_schema.get("minimum")
-								maximum = field_schema.get("maximum")
-								if minimum is not None or maximum is not None:
-									constraint_parts.append(f"min={minimum} max={maximum}")
-
-								pattern = field_schema.get("pattern")
-								if isinstance(pattern, str) and pattern:
-									constraint_parts.append(f"pattern={pattern}")
-							example_expr = Search_API.build_cql2_example(field_name, field_schema, collection)
-							constraints_text = f" | constraints: {'; '.join(constraint_parts)}" if constraint_parts else ""
-							print(f"      * {field_name} ({field_type}) e.g. {example_expr}{constraints_text}")
-					else:
-						print("      * No queryable properties returned")
-				except Exception as e:
-					print(f"      * Queryables not available: {e}")
+			self.print_collections()
 			return []
 
 		search_params: Dict[str, Any] = {'limit': limit}
@@ -395,3 +404,7 @@ def compose_filter(
 
 def build_cql2_example(field_name: str, field_schema: Any) -> str:
 	return Search_API.build_cql2_example(field_name, field_schema)
+
+
+def print_queryables(search_api: Search_API) -> None:
+	search_api.print_queryables()
