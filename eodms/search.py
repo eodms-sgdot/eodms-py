@@ -367,8 +367,7 @@ class Search_API:
 							break
 
 					print(
-						f"Page {page_count} ({page_token}): items={len(page_items)}, "
-						f"next_links={len(next_hrefs)} ({len(items)} collected so far)"
+						f"Page {page_count} ({page_token}): ({len(items)} collected so far)"
 					)
 					if len(items) >= limit:
 						break

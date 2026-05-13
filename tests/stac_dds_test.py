@@ -207,7 +207,7 @@ def run(
 @click.option('--limit', '-l', required=False, default=1000, type=int,
               help='Maximum number of items to fetch from search (default: 1000).')
 @click.option('--filter', '-f', 'filter_text', required=False, default=None,
-              help="CQL2 text filter expression (e.g., roll_number = 'KA3').")
+              help="CQL2 text filter expression (e.g., beam_mnemonic LIKE 'SC30M%' AND relative_orbit = 10).")
 @click.option('--s-intersect', 's_intersect', required=False, default=None,
               help='WKT geometry used with S_INTERSECTS on geometry (e.g., "POLYGON((-100.0 45.0, -99.2 45.6, -98.3 45.4, -97.4 46.0, -96.6 45.7, -96.1 46.5, -96.8 47.2, -97.9 47.5, -99.1 47.0, -100.0 46.1, -100.0 45.0))").')
 @click.option('--aoi', required=False, default=None, type=click.Path(exists=True),
