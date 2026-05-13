@@ -1,7 +1,7 @@
 import re
 import warnings
 from typing import Any, Dict, List, Optional
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 from pystac_client import Client, ItemSearch
 from pystac_client.stac_api_io import StacApiIO
@@ -266,7 +266,9 @@ class Search_API:
 
 		try:
 			items: List[Dict[str, Any]] = []
-			print(f"Searching for up to {limit} items...")
+			seen_item_ids = set()
+			seen_pages = set()
+			print(f"Searching up to limit of {limit}...")
 			filter_text = kwargs.get('filter')
 			page_count = 0
 
@@ -308,14 +310,57 @@ class Search_API:
 				for page in item_search.pages_as_dicts():
 					page_count += 1
 					page_items = page.get('features', [])
-					print(
-						f"Fetched page {page_count} for {collection_id}: "
-						f"{len(page_items)} items ({len(items)} collected so far)"
+
+					# Detect repeated pages to avoid looping forever if server pagination is unstable.
+					page_item_ids = tuple(
+						item.get('id')
+						for item in page_items
+						if isinstance(item, dict)
 					)
+					next_hrefs = tuple(
+						link.get('href')
+						for link in page.get('links', [])
+						if isinstance(link, dict) and link.get('rel') == 'next'
+					)
+					page_token = None
+					if next_hrefs:
+						parsed_next = urlparse(next_hrefs[0])
+						query = parse_qs(parsed_next.query)
+						vals = query.get("page_token")
+						if vals:
+							page_token = vals[0]
+
+					if page_token is not None and page_token in seen_pages:
+						print(
+							"Detected repeated page token during pagination; "
+							"stopping to avoid an infinite loop."
+						)
+						break
+
+					if page_token is not None:
+						seen_pages.add(page_token)
+
+					new_items = 0
+					duplicate_items = 0
+
 					for item in page_items:
+						item_id = item.get('id') if isinstance(item, dict) else None
+						if item_id is not None:
+							item_key = (collection_id, item_id)
+							if item_key in seen_item_ids:
+								duplicate_items += 1
+								continue
+							seen_item_ids.add(item_key)
+
 						items.append(item)
+						new_items += 1
 						if len(items) >= limit:
 							break
+
+					print(
+						f"Page {page_count} ({page_token}): items={len(page_items)}, "
+						f"next_links={len(next_hrefs)} ({len(items)} collected so far)"
+					)
 					if len(items) >= limit:
 						break
 
