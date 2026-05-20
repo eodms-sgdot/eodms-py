@@ -1,3 +1,4 @@
+import json
 import re
 import warnings
 from typing import Any, Dict, List, Optional
@@ -5,6 +6,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from pystac_client import Client, ItemSearch
 from pystac_client.stac_api_io import StacApiIO
+from shapely.geometry import shape, Polygon, MultiPolygon
 
 from . import config
 
@@ -237,6 +239,70 @@ class Search_API:
 			return f"S_INTERSECTS({field_name}, POLYGON((-100 45, -95 45, -95 50, -100 50, -100 45)))"
 		return f"{field_name} = 'example'"
 
+	@staticmethod
+	def parse_aoi_geojson(aoi_file: str) -> List[Dict[str, Any]]:
+		"""
+		Parse GeoJSON AOI file and extract polygon geometries with WKT representations.
+
+		Supports both FeatureCollection and individual Feature GeoJSON formats.
+		Handles MultiPolygon geometries by flattening them into individual polygons.
+
+		Args:
+			aoi_file: Path to GeoJSON file containing 1-5 polygons.
+
+		Returns:
+			List of geometry dicts with keys: name, wkt.
+			Example: [{'name': 'polygon 1', 'wkt': 'POLYGON((lon lat, lon lat, ...))'}, ...]
+
+		Raises:
+			ValueError: If file not found, invalid JSON, no polygons found, or more than 5 polygons.
+		"""
+		try:
+			with open(aoi_file, 'r', encoding='utf-8') as f:
+				geojson_data = json.load(f)
+		except FileNotFoundError:
+			raise ValueError(f"AOI file not found: {aoi_file}")
+		except json.JSONDecodeError:
+			raise ValueError(f"AOI file is not valid JSON: {aoi_file}")
+
+		# Extract features from FeatureCollection or use feature directly
+		if geojson_data.get('type') == 'FeatureCollection':
+			features = geojson_data.get('features', [])
+		elif geojson_data.get('type') == 'Feature':
+			features = [geojson_data]
+		else:
+			features = []
+
+		wkt_polygons = []
+
+		# Extract polygon geometries using Shapely
+		for feature in features:
+			geometry_name = feature.get('properties', {}).get('name') if isinstance(feature, dict) else None
+			geometry_dict = feature.get('geometry', {})
+
+			try:
+				geom = shape(geometry_dict)
+			except Exception:
+				continue
+
+			if isinstance(geom, Polygon):
+				wkt_polygons.append({'name': geometry_name, 'wkt': geom.wkt})
+			elif isinstance(geom, MultiPolygon):
+				for idx, poly in enumerate(geom.geoms, start=1):
+					wkt_polygons.append({
+						'name': f"{geometry_name} part {idx}" if geometry_name else None,
+						'wkt': poly.wkt,
+					})
+
+		if not wkt_polygons:
+			raise ValueError("No polygons found in AOI GeoJSON file.")
+
+		if len(wkt_polygons) > 5:
+			raise ValueError(f"AOI file contains {len(wkt_polygons)} polygons; maximum is 5.")
+
+		print(f"Loaded {len(wkt_polygons)} polygon(s) from AOI file.")
+		return wkt_polygons
+
 	def stac_search(
 		self,
 		collections: Optional[List[str]] = None,
@@ -403,6 +469,22 @@ def compose_filter(
 
 def build_cql2_example(field_name: str, field_schema: Any) -> str:
 	return Search_API.build_cql2_example(field_name, field_schema)
+
+
+def parse_aoi_geojson(aoi_file: str) -> List[Dict[str, Any]]:
+	"""
+	Parse GeoJSON AOI file and extract polygon geometries with WKT representations.
+
+	Args:
+		aoi_file: Path to GeoJSON file containing 1-5 polygons.
+
+	Returns:
+		List of geometry dicts with keys: name, wkt.
+
+	Raises:
+		ValueError: If file not found, invalid JSON, no polygons found, or more than 5 polygons.
+	"""
+	return Search_API.parse_aoi_geojson(aoi_file)
 
 
 def print_queryables(search_api: Search_API) -> None:

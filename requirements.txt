@@ -3,3 +3,4 @@ tqdm>=4.59.0
 dateparser>=1.0.0
 pystac-client>=0.7.0
 click>=8.0.0
+shapely>=2.0.0

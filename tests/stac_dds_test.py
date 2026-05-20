@@ -41,76 +41,6 @@ def save_items_geojson(items: List[Dict[str, Any]], output_file: str):
     print(f"Saved {len(feature_collection['features'])} items to {output_file}")
 
 
-def parse_aoi_geojson(aoi_file: str) -> List[Dict[str, Any]]:
-    """
-    Parse GeoJSON AOI file and extract polygon geometries with optional names.
-    
-    Args:
-        aoi_file: Path to GeoJSON file containing 1-5 polygons.
-        
-    Returns:
-        List of geometry dicts with keys: name, wkt.
-        
-    Raises:
-        ValueError: If polygons are not valid or count is outside 1-5 range.
-    """
-    try:
-        with open(aoi_file, 'r', encoding='utf-8') as f:
-            geojson_data = json.load(f)
-    except FileNotFoundError:
-        raise ValueError(f"AOI file not found: {aoi_file}")
-    except json.JSONDecodeError:
-        raise ValueError(f"AOI file is not valid JSON: {aoi_file}")
-    
-    polygons = []
-    
-    # Extract features from FeatureCollection or use feature directly
-    if geojson_data.get('type') == 'FeatureCollection':
-        features = geojson_data.get('features', [])
-    elif geojson_data.get('type') == 'Feature':
-        features = [geojson_data]
-    else:
-        features = []
-    
-    # Extract polygon geometries
-    for feature in features:
-        props = feature.get('properties', {}) if isinstance(feature, dict) else {}
-        geometry_name = props.get('name')
-        geometry = feature.get('geometry', {})
-        if geometry.get('type') == 'Polygon':
-            polygons.append({'name': geometry_name, 'geometry': geometry})
-        elif geometry.get('type') == 'MultiPolygon':
-            # Flatten MultiPolygon into individual polygons
-            for idx, poly in enumerate(geometry.get('coordinates', []), start=1):
-                polygons.append({
-                    'name': f"{geometry_name} part {idx}" if geometry_name else None,
-                    'geometry': {'type': 'Polygon', 'coordinates': poly},
-                })
-    
-    if not polygons:
-        raise ValueError("No polygons found in AOI GeoJSON file.")
-    
-    if len(polygons) > 5:
-        raise ValueError(f"AOI file contains {len(polygons)} polygons; maximum is 5.")
-    
-    # Convert GeoJSON polygons to WKT format
-    wkt_polygons = []
-    for polygon_entry in polygons:
-        polygon = polygon_entry.get('geometry', {})
-        coords = polygon.get('coordinates', [])
-        if not coords:
-            raise ValueError("Polygon has no coordinates.")
-        
-        # coords[0] is the outer ring (lon, lat) pairs
-        ring = coords[0]
-        # Convert to WKT: POLYGON((lon lat, lon lat, ...))
-        wkt_coords = ', '.join(f"{lon} {lat}" for lon, lat in ring)
-        wkt = f"POLYGON(({wkt_coords}))"
-        wkt_polygons.append({'name': polygon_entry.get('name'), 'wkt': wkt})
-    
-    print(f"Loaded {len(wkt_polygons)} polygon(s) from AOI file.")
-    return wkt_polygons
-
 def run(
     eodms_user,
     eodms_pwd,
@@ -141,7 +71,7 @@ def run(
     s_intersect_list: List[Dict[str, Any]] = []
     if aoi:
         try:
-            s_intersect_list = parse_aoi_geojson(aoi)
+            s_intersect_list = search.parse_aoi_geojson(aoi)
         except ValueError as e:
             print(f"Error parsing AOI file: {e}")
             return
