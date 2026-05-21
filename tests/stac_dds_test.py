@@ -1,8 +1,12 @@
+# Additional dependencies required by this script (not part of the core eodms package):
+#   pip install fiona shapely
 import json
 import os
 import sys
 from typing import Optional, List, Dict, Any
 import click
+import fiona
+from shapely.geometry import shape
 
 # Allow running this script directly from the tests directory.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,6 +14,32 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from eodms import dds, aaa, search
+
+
+def parse_aoi_file(aoi_file: str) -> List[Dict[str, Any]]:
+    """Read polygon features from a GeoJSON, shapefile, or geopackage and return WKT strings."""
+    try:
+        with fiona.open(aoi_file) as src:
+            features = list(src)
+    except Exception as e:
+        raise ValueError(f"Could not open AOI file '{aoi_file}': {e}")
+
+    polygons = []
+    for feature in features:
+        geom = feature.get('geometry')
+        if geom is None or geom.get('type') not in ('Polygon', 'MultiPolygon'):
+            continue
+        name = (feature.get('properties') or {}).get('name')
+        polygons.append({'name': name, 'wkt': shape(geom).wkt})
+
+    if not polygons:
+        raise ValueError("No polygon geometries found in AOI file.")
+    if len(polygons) > 5:
+        raise ValueError(f"AOI file contains {len(polygons)} polygons; maximum is 5.")
+
+    print(f"Loaded {len(polygons)} polygon(s) from AOI file.")
+    return polygons
+
 
 def download(dds_api, collection, item_uuid, download_dir):
 
@@ -71,7 +101,7 @@ def run(
     s_intersect_list: List[Dict[str, Any]] = []
     if aoi:
         try:
-            s_intersect_list = search.parse_aoi_geojson(aoi)
+            s_intersect_list = parse_aoi_file(aoi)
         except ValueError as e:
             print(f"Error parsing AOI file: {e}")
             return
@@ -94,7 +124,7 @@ def run(
             label = geometry_name if geometry_name else f"polygon {idx}"
             print(f"Searching AOI geometry: {label}")
         parsed_filter = search.compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
-        
+
         items = search_api.stac_search(
             collections=[collection] if collection else None,
             datetime=datetime_range,
