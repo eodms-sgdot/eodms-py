@@ -8,7 +8,44 @@ from pystac_client.stac_api_io import StacApiIO
 from . import config
 
 class Search_API:
-	"""STAC search client for the EODMS catalog."""
+
+	def search_multiple_geometries(
+		self,
+		s_intersect_list: List[Dict[str, Any]],
+		collection: Optional[str] = None,
+		datetime_range: Optional[str] = None,
+		bbox: Optional[List[float]] = None,
+		limit: int = 100,
+		filter_text: Optional[str] = None,
+	) -> List[Dict[str, Any]]:
+		"""
+		Perform multiple STAC searches for a list of geometries, deduplicating items by ID.
+		Each geometry in s_intersect_list should be a dict with keys 'name' and 'wkt'.
+		"""
+		all_items = []
+		seen_ids = set()
+		for idx, geometry_entry in enumerate(s_intersect_list, start=1):
+			geometry_name = geometry_entry.get('name')
+			geometry_wkt = geometry_entry.get('wkt')
+			if geometry_wkt:
+				label = geometry_name if geometry_name else f"polygon {idx}"
+				print(f"Searching AOI geometry: {label}")
+			parsed_filter = self.compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
+			items = self.stac_search(
+				collections=[collection] if collection else None,
+				datetime=datetime_range,
+				bbox=bbox,
+				limit=limit,
+				filter=parsed_filter,
+				filter_lang='cql2-text' if parsed_filter else None,
+			)
+			if items:
+				for item in items:
+					item_id = item.get('id')
+					if item_id not in seen_ids:
+						all_items.append(item)
+						seen_ids.add(item_id)
+		return all_items
 
 	def __init__(self, aaa_api=None, environment='prod'):
 		domain_config = config.get_domain_config(environment)

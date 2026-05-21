@@ -114,35 +114,16 @@ def run(
     
     # Search using pystac_client with shared AAA instance
     search_api = search.Search_API(aaa_api, env)
-    all_items = []
-    seen_ids = set()
-    
-    for idx, geometry_entry in enumerate(s_intersect_list, start=1):
-        geometry_name = geometry_entry.get('name')
-        geometry_wkt = geometry_entry.get('wkt')
-        if geometry_wkt:
-            label = geometry_name if geometry_name else f"polygon {idx}"
-            print(f"Searching AOI geometry: {label}")
-        parsed_filter = search.compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
-
-        items = search_api.stac_search(
-            collections=[collection] if collection else None,
-            datetime=datetime_range,
-            bbox=bbox,
-            limit=limit,
-            filter=parsed_filter,
-            filter_lang='cql2-text' if parsed_filter else None,
-        )
-        
-        # Deduplicate items by ID
-        if items:
-            for item in items:
-                item_id = item.get('id')
-                if item_id not in seen_ids:
-                    all_items.append(item)
-                    seen_ids.add(item_id)
-    
-    items = all_items if all_items else None
+    items = search_api.search_multiple_geometries(
+        s_intersect_list=s_intersect_list,
+        collection=collection,
+        datetime_range=datetime_range,
+        bbox=bbox,
+        limit=limit,
+        filter_text=filter_text,
+    )
+    if not items:
+        items = None
 
     if items is not None and output:
         save_items_geojson(items, output)
