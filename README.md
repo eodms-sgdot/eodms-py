@@ -56,6 +56,46 @@ search_api.stac_search(collections=None)
 
 For a full search-and-download example see [stac_dds_test.py](./tests/stac_dds_test.py) and [features_dds_test.py](./tests/features_dds_test.py).
 
+### Run OGC Processes Jobs (RADARSAT-1 L1)
+
+The `Processes_API` class provides helpers for the EODMS OGC Processes workflow used in [radarsat1_l1_processing.ipynb](./tests/radarsat1_l1_processing.ipynb):
+
+- list processes
+- print process input schema
+- submit a process job
+- poll job status
+- download output files from job results
+
+```python
+import os
+from eodms import aaa, Processes_API
+
+aaa_api = aaa.AAA_API(os.environ['EODMS_USERNAME'], os.environ['EODMS_PASSWORD'])
+proc_api = Processes_API(aaa_api=aaa_api, environment='prod')
+
+# List all available processes
+processes = proc_api.list_processes()
+
+# Print expected input structure for a process
+proc_api.print_process_inputs('Radarsat1GAMMAL1SLC')
+
+# Submit RADARSAT-1 L1 processing job
+order = proc_api.submit_r1_process(
+  segment_id='your-fred-segment-uuid',
+  process_id='Radarsat1GAMMAL1SLC',
+  start_time='2007-06-21T10:18:22Z',
+  stop_time='2007-06-21T10:18:28Z',
+)
+job_id = order['jobID']
+
+# Wait for terminal job status
+status = proc_api.poll_job_status(job_id, interval=60, timeout=3600)
+
+# Download all output files referenced by /jobs/{jobID}/results
+downloaded = proc_api.download_job_results(job_id, out_dir=f'./data/{job_id}')
+print(downloaded)
+```
+
 ## Testing
 
 ### Clone Repository
@@ -181,6 +221,81 @@ python features_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -l 5
 
 # Download a specific feature by ID
 python features_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -f some-feature-uuid
+```
+
+### Run processes_test.py
+
+Runs OGC Processes operations used by the RADARSAT-1 L1 workflow: list processes, inspect process inputs, submit jobs, monitor status, fetch results, and download outputs.
+
+```
+Usage: processes_test.py [OPTIONS]
+
+  OGC Processes CLI for EODMS processing workflows.
+
+Options:
+  -u, --username TEXT              The EODMS username.
+  -p, --password TEXT              The EODMS password.
+  -e, --env TEXT                   Defaults to "prod". If "staging", define
+                                   EODMS_STAGING_DOMAIN env variable.
+  -pi, --process_id TEXT           Processing service ID
+                                   (e.g., Radarsat1GAMMAL1SLC).
+  --list_processes / --no-list_processes
+                                   List available processes (default behavior).
+  --show_inputs                    Print required input structure for
+                                   --process_id.
+  --submit                         Submit a processing job (requires auth).
+  -sid, --segment_id TEXT          RADARSAT-1 segment UUID for helper submit
+                                   mode.
+  --start_time TEXT                Optional frame start datetime for
+                                   RADARSAT-1 helper mode.
+  --stop_time TEXT                 Optional frame stop datetime for RADARSAT-1
+                                   helper mode.
+  --slc_type TEXT                  SLC type for RADARSAT-1 helper mode
+                                   (default: beta0).
+  --lookup_table TEXT              Lookup table for RADARSAT-1 helper mode
+                                   (default: mixed).
+  --inputs_json TEXT               JSON string or path to JSON file for generic
+                                   submit inputs.
+  --outputs_json TEXT              JSON string or path to JSON file for generic
+                                   submit outputs.
+  --mode TEXT                      Execution mode for generic submit (default:
+                                   async).
+  -j, --job_id TEXT                Existing job ID to check/poll/results/
+                                   download.
+  --wait                           Poll job status until terminal state.
+  --interval INTEGER               Polling interval seconds for --wait (default:
+                                   30).
+  --timeout INTEGER                Polling timeout seconds for --wait (default:
+                                   600).
+  --show_results                   Print /jobs/{jobID}/results JSON.
+  -dl, --download_dir TEXT         Download all job result files to this
+                                   folder.
+  --skip_existing / --no-skip_existing
+                                   Skip existing local files when downloading
+                                   results (default: enabled).
+  -o, --output TEXT                Write JSON response (process details or
+                                   submit response) to file.
+  -h, --help                       Show this message and exit.
+```
+
+```bash
+# List available processes
+python tests/processes_test.py
+
+# Show input schema for a process
+python tests/processes_test.py --show_inputs --process_id Radarsat1GAMMAL1SLC
+
+# Submit RADARSAT-1 L1 process job (helper mode)
+python tests/processes_test.py -u eodms_user -p eodms_pwd --submit --process_id Radarsat1GAMMAL1SLC --segment_id your-segment-uuid --start_time 2007-06-21T10:18:22Z --stop_time 2007-06-21T10:18:28Z
+
+# Poll existing job until completion
+python tests/processes_test.py -u eodms_user -p eodms_pwd --job_id your-job-id --wait --interval 60 --timeout 3600
+
+# Download all files from job results
+python tests/processes_test.py -u eodms_user -p eodms_pwd --job_id your-job-id --download_dir ./data/your-job-id
+
+# Submit generic process payload from JSON file
+python tests/processes_test.py -u eodms_user -p eodms_pwd --submit --process_id Radarsat1GAMMAL1SLC --inputs_json ./inputs.json
 ```
 
 ### Run test_search_queryables.py

@@ -11,5 +11,6 @@ __email__ = 'eodms-sgdot@nrcan-rncan.gc.ca'
 from .__version__ import __version__
 from .aaa import AAA_API
 from .dds import DDS_API
+from .processes import Processes_API
 from .search import Search_API
 from . import config

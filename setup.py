@@ -16,6 +16,7 @@ setup(
     long_description_content_type="text/markdown",
     install_requires=[
         "dateparser", 
+        "boto3",
         "pystac-client",
         "requests",
         "tqdm",

@@ -2,3 +2,4 @@
 /eodms_py.egg-info
 /tests/__pycache__
 output.geojson
+/.vscode
