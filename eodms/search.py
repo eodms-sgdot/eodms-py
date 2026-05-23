@@ -414,6 +414,31 @@ class Search_API:
 
 		return items
 
+	def get_item(self, collection: str, item_uuid: str) -> Optional[Dict[str, Any]]:
+		"""Get a single STAC item by collection ID and item UUID."""
+		if not collection:
+			print("Collection is required.")
+			return None
+		if not item_uuid:
+			print("item_uuid is required.")
+			return None
+
+		try:
+			collection_obj = self.client.get_collection(collection)
+			if collection_obj is None:
+				print(f"Collection not found: {collection}")
+				return None
+
+			item = collection_obj.get_item(item_uuid)
+			if item is None:
+				print(f"Item not found: {collection}/{item_uuid}")
+				return None
+
+			return item.to_dict() if hasattr(item, "to_dict") else item
+		except Exception as e:
+			print(f"Get item error: {e}")
+			return None
+
 
 # Backward-compatible module-level helpers.
 def parse_filter_text(filter_text: Optional[str]):
@@ -442,3 +467,7 @@ def build_cql2_example(field_name: str, field_schema: Any) -> str:
 
 def print_queryables(search_api: Search_API) -> None:
 	search_api.print_queryables()
+
+
+def get_item(search_api: Search_API, collection: str, item_uuid: str) -> Optional[Dict[str, Any]]:
+	return search_api.get_item(collection, item_uuid)

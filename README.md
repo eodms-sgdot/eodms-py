@@ -241,23 +241,14 @@ Options:
                                    (e.g., Radarsat1GAMMAL1SLC).
   --list_processes / --no-list_processes
                                    List available processes (default behavior).
-  --show_inputs                    Print required input structure for
-                                   --process_id.
+  --input-structure                Print process input structure and sample
+                                   payload from
+                                   /processing/processes/{processID}.
   --submit                         Submit a processing job (requires auth).
-  -sid, --segment_id TEXT          RADARSAT-1 segment UUID for helper submit
-                                   mode.
-  --start_time TEXT                Optional frame start datetime for
-                                   RADARSAT-1 helper mode.
-  --stop_time TEXT                 Optional frame stop datetime for RADARSAT-1
-                                   helper mode.
-  --slc_type TEXT                  SLC type for RADARSAT-1 helper mode
-                                   (default: beta0).
-  --lookup_table TEXT              Lookup table for RADARSAT-1 helper mode
-                                   (default: mixed).
-  --inputs_json TEXT               JSON string or path to JSON file for generic
-                                   submit inputs.
-  --outputs_json TEXT              JSON string or path to JSON file for generic
-                                   submit outputs.
+  --inputs_json TEXT               JSON string or path to JSON file for submit
+                                   inputs.
+  --outputs_json TEXT              JSON string or path to JSON file for submit
+                                   outputs.
   --mode TEXT                      Execution mode for generic submit (default:
                                    async).
   -j, --job_id TEXT                Existing job ID to check/poll/results/
@@ -282,20 +273,20 @@ Options:
 # List available processes
 python tests/processes_test.py
 
-# Show input schema for a process
-python tests/processes_test.py --show_inputs --process_id Radarsat1GAMMAL1SLC
+# Show input schema and sample execution payload for a process
+python tests/processes_test.py --input-structure --process_id Radarsat1CEOSL1SLC
 
-# Submit RADARSAT-1 L1 process job (helper mode)
-python tests/processes_test.py -u eodms_user -p eodms_pwd --submit --process_id Radarsat1GAMMAL1SLC --segment_id your-segment-uuid --start_time 2007-06-21T10:18:22Z --stop_time 2007-06-21T10:18:28Z
+# Submit generic process payload from JSON file (inputs-only object)
+python tests/processes_test.py -u eodms_user -p eodms_pwd --submit --process_id Radarsat1CEOSL1SLC --inputs_json ./inputs.json
+
+# Submit full execution payload JSON (inputs + outputs + mode)
+python tests/processes_test.py -u eodms_user -p eodms_pwd --submit --process_id Radarsat1CEOSL1SLC --inputs_json ./radarsat1_input.json
 
 # Poll existing job until completion
 python tests/processes_test.py -u eodms_user -p eodms_pwd --job_id your-job-id --wait --interval 60 --timeout 3600
 
 # Download all files from job results
 python tests/processes_test.py -u eodms_user -p eodms_pwd --job_id your-job-id --download_dir ./data/your-job-id
-
-# Submit generic process payload from JSON file
-python tests/processes_test.py -u eodms_user -p eodms_pwd --submit --process_id Radarsat1GAMMAL1SLC --inputs_json ./inputs.json
 ```
 
 ### Run test_search_queryables.py
