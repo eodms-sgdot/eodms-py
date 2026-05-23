@@ -32,6 +32,7 @@ class _FakeCollection:
     def __init__(self, collection_id: str, queryables: dict):
         self.id = collection_id
         self._queryables = queryables
+        self._items = {"item-1": {"id": "item-1", "type": "Feature"}}
 
     def get_queryables(self):
         return self._queryables
@@ -39,6 +40,9 @@ class _FakeCollection:
     def get_single_link(self, rel: str):
         assert rel == "items"
         return _FakeLink("https://example.test/search/collections/RCMImageProducts/items")
+
+    def get_item(self, item_id: str):
+        return self._items.get(item_id)
 
 
 class _FakeClient:
@@ -357,6 +361,28 @@ def test_stac_search_prints_progress_for_each_page(monkeypatch, capsys):
     assert items == [{"id": "item-1"}, {"id": "item-2"}, {"id": "item-3"}]
     assert "Fetched page 1 for RCMImageProducts: 2 items (0 collected so far)" in captured.out
     assert "Fetched page 2 for RCMImageProducts: 1 items (2 collected so far)" in captured.out
+
+
+def test_get_item_returns_item_when_found():
+    queryables = {"properties": {"satellite_id": {"type": "string"}}}
+    collection = _FakeCollection("RCMImageProducts", queryables)
+    api = _make_api_with_client(_FakeClient(collection))
+
+    item = api.get_item("RCMImageProducts", "item-1")
+
+    assert item == {"id": "item-1", "type": "Feature"}
+
+
+def test_get_item_returns_none_for_unknown_collection(capsys):
+    queryables = {"properties": {"satellite_id": {"type": "string"}}}
+    collection = _FakeCollection("RCMImageProducts", queryables)
+    api = _make_api_with_client(_FakeClient(collection))
+
+    item = api.get_item("UnknownCollection", "item-1")
+
+    captured = capsys.readouterr()
+    assert item is None
+    assert "Collection not found: UnknownCollection" in captured.out
 
 
 @pytest.mark.integration
