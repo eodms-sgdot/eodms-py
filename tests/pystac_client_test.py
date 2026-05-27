@@ -5,6 +5,7 @@ import os
 import re
 import sys
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 import click
 import fiona
@@ -177,6 +178,9 @@ def stac_search_direct(
 
     items: List[Dict[str, Any]] = []
     seen_item_ids = set()
+    seen_page_tokens = set()
+    seen_page_signatures = set()
+    page_count = 0
     print(f"Searching up to limit of {limit}...")
 
     for collection_id in collections:
@@ -198,16 +202,62 @@ def stac_search_direct(
         )
 
         for page in item_search.pages_as_dicts():
+            page_count += 1
             page_items = page.get('features', [])
+            page_item_ids = tuple(
+                item.get('id')
+                for item in page_items
+                if isinstance(item, dict)
+            )
+
+            page_token = None
+            for link in page.get('links', []):
+                if isinstance(link, dict) and link.get('rel') == 'next' and link.get('href'):
+                    parsed_next = urlparse(link['href'])
+                    query = parse_qs(parsed_next.query)
+                    vals = query.get('page_token')
+                    if vals:
+                        page_token = vals[0]
+                    break
+
+            if page_token is not None and page_token in seen_page_tokens:
+                print(
+                    "Detected repeated page_token during pagination; "
+                    "stopping to avoid an infinite loop."
+                )
+                break
+
+            if page_token is not None:
+                seen_page_tokens.add(page_token)
+
+            # If 'next' points back to self without a token, signature repeat catches the loop.
+            page_signature = (collection_id, page_item_ids, page_token)
+            if page_signature in seen_page_signatures:
+                print(
+                    "Detected repeated page content during pagination; "
+                    "stopping to avoid an infinite loop."
+                )
+                break
+            seen_page_signatures.add(page_signature)
+
+            new_items = 0
+            duplicate_items = 0
             for item in page_items:
                 item_id = item.get('id') if isinstance(item, dict) else None
                 item_key = (collection_id, item_id)
                 if item_key in seen_item_ids:
+                    duplicate_items += 1
                     continue
                 seen_item_ids.add(item_key)
                 items.append(item)
+                new_items += 1
                 if len(items) >= limit:
                     break
+
+            print(
+                f"Page {page_count} ({page_token}): +{new_items} new, "
+                f"{duplicate_items} duplicates, {len(items)} collected"
+            )
             if len(items) >= limit:
                 break
 
