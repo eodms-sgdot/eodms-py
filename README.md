@@ -224,13 +224,13 @@ Options:
 
 ```bash
 # ItemSearch path (collection items endpoint)
-python tests/pystac_client_test.py --search-method itemsearch -c rcm-ard -l 1000 -d "2025-01-01/2026-05-01" -e staging
+python tests/pystac_client_test.py --search-method itemsearch -c rcm-ard -l 1000 -d "2025-01-01/2026-05-01"
 
 # catalog.search path
-python tests/pystac_client_test.py --search-method catalog-search -c rcm-ard -l 1000 -d "2025-01-01/2026-05-01" -e staging
+python tests/pystac_client_test.py --search-method catalog-search -c rcm-ard -l 1000 -d "2025-01-01/2026-05-01"
 
 # Match reported URL parameters (limit + datetime)
-python tests/pystac_client_test.py --search-method itemsearch -c rcm-ard -l 100 -d "2025-01-01T00:00:00Z/2025-05-01T23:59:59Z" -e staging
+python tests/pystac_client_test.py --search-method itemsearch -c rcm-ard -l 100 -d "2025-01-01T00:00:00Z/2025-05-01T23:59:59Z"
 ```
 
 ### Run features_dds_test.py
