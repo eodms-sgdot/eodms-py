@@ -265,6 +265,104 @@ def stac_search_direct(
     return items
 
 
+def stac_search_catalog(
+    client: Client,
+    collections: List[str],
+    bbox: Optional[List[float]],
+    datetime_range: Optional[str],
+    limit: int,
+    filter_text: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Run direct catalog.search and return deduplicated items."""
+    collections_param: Any = collections[0] if len(collections) == 1 else collections
+
+    search_params: Dict[str, Any] = {
+        'method': 'GET',
+        'collections': collections_param,
+        'limit': limit,
+        'max_items': limit,
+    }
+    if bbox:
+        search_params['bbox'] = bbox
+    if datetime_range:
+        search_params['datetime'] = datetime_range
+    if filter_text:
+        search_params['filter'] = filter_text
+        search_params['filter_lang'] = 'cql2-text'
+
+    print(f"Searching up to limit of {limit} with catalog.search...")
+    results = client.search(**search_params)
+
+    items: List[Dict[str, Any]] = []
+    seen_item_ids = set()
+    seen_page_tokens = set()
+    seen_page_signatures = set()
+    page_count = 0
+
+    for page in results.pages_as_dicts():
+        page_count += 1
+        page_items = page.get('features', [])
+        page_item_ids = tuple(
+            item.get('id')
+            for item in page_items
+            if isinstance(item, dict)
+        )
+
+        page_token = None
+        for link in page.get('links', []):
+            if isinstance(link, dict) and link.get('rel') == 'next' and link.get('href'):
+                parsed_next = urlparse(link['href'])
+                query = parse_qs(parsed_next.query)
+                vals = query.get('page_token')
+                if vals:
+                    page_token = vals[0]
+                break
+
+        if page_token is not None and page_token in seen_page_tokens:
+            print(
+                "Detected repeated page_token during catalog.search pagination; "
+                "stopping to avoid an infinite loop."
+            )
+            break
+
+        if page_token is not None:
+            seen_page_tokens.add(page_token)
+
+        page_signature = (page_item_ids, page_token)
+        if page_signature in seen_page_signatures:
+            print(
+                "Detected repeated page content during catalog.search pagination; "
+                "stopping to avoid an infinite loop."
+            )
+            break
+        seen_page_signatures.add(page_signature)
+
+        new_items = 0
+        duplicate_items = 0
+        for item in page_items:
+            item_id = item.get('id') if isinstance(item, dict) else None
+            if item_id is not None and item_id in seen_item_ids:
+                duplicate_items += 1
+                continue
+            if item_id is not None:
+                seen_item_ids.add(item_id)
+            items.append(item)
+            new_items += 1
+            if len(items) >= limit:
+                break
+
+        print(
+            f"Page {page_count} ({page_token}): matched={page.get('numberMatched')}, "
+            f"returned={page.get('numberReturned', len(page_items))}, +{new_items} new, "
+            f"{duplicate_items} duplicates, {len(items)} collected"
+        )
+        if len(items) >= limit:
+            break
+
+    print(f"Found {len(items)} items (limited to {limit})")
+    return items
+
+
 def run(
     eodms_user,
     eodms_pwd,
@@ -279,6 +377,7 @@ def run(
     filter_text=None,
     s_intersect=None,
     aoi=None,
+    search_method='itemsearch',
 ):
     _ = download_dir  # Kept for CLI parity with stac_dds_test.py
 
@@ -319,14 +418,24 @@ def run(
             print(f"Searching AOI geometry: {label}")
 
         composed_filter = compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
-        items = stac_search_direct(
-            client=client,
-            collections=[collection],
-            bbox=bbox,
-            datetime_range=datetime_range,
-            limit=limit,
-            filter_text=composed_filter,
-        )
+        if search_method == 'catalog-search':
+            items = stac_search_catalog(
+                client=client,
+                collections=[collection],
+                bbox=bbox,
+                datetime_range=datetime_range,
+                limit=limit,
+                filter_text=composed_filter,
+            )
+        else:
+            items = stac_search_direct(
+                client=client,
+                collections=[collection],
+                bbox=bbox,
+                datetime_range=datetime_range,
+                limit=limit,
+                filter_text=composed_filter,
+            )
 
         for item in items:
             item_id = item.get('id') if isinstance(item, dict) else None
@@ -359,10 +468,13 @@ def run(
               help='GeoJSON file with 1-5 polygon(s) to search for (e.g., aoi.geojson).')
 @click.option('--output', '-o', required=False, default=None,
               help='Output GeoJSON filename (e.g., results.geojson).')
+@click.option('--search-method', required=False, default='itemsearch',
+              type=click.Choice(['itemsearch', 'catalog-search'], case_sensitive=False),
+              help='Search backend: "itemsearch" (collection items endpoint) or "catalog-search" (catalog.search).')
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--download_dir', '-dl', required=False, default='.',
               help='Accepted for parity with stac_dds_test.py. Not used in this pure pystac_client script.')
-def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, aoi, output, env, download_dir):
+def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, aoi, output, search_method, env, download_dir):
     """Pure pystac_client search/fetch test with CLI parity to stac_dds_test.py."""
     bbox_list = None
     if bbox:
@@ -388,6 +500,7 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
         filter_text,
         s_intersect,
         aoi,
+        search_method,
     )
 
 
