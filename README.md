@@ -190,6 +190,49 @@ python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts --aoi tes
 python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts -dl ./downloads
 ```
 
+### Run pystac_client_test.py (Vanilla pystac-client Demo)
+
+Demonstrates direct pystac-client usage without the Search_API wrapper. This test supports two paging/search paths:
+
+- `itemsearch`: Uses `ItemSearch` against `/collections/{id}/items`.
+- `catalog-search`: Uses `catalog.search(...)` directly.
+
+See implementation in [tests/pystac_client_test.py](./tests/pystac_client_test.py).
+
+```
+Usage: pystac_client_test.py [OPTIONS]
+
+  Pure pystac-client search/fetch test with CLI parity to stac_dds_test.py.
+
+Options:
+  -u, --username TEXT      The EODMS username.
+  -p, --password TEXT      The EODMS password.
+  -c, --collection TEXT    The collection name.
+      --uuid TEXT          UUID of the item to fetch (skips search).
+  -d, --datetime TEXT      Temporal filter as ISO 8601 string or range.
+  -b, --bbox TEXT          Bounding box: west,south,east,north.
+  -l, --limit INTEGER      Maximum number of items to fetch (default: 1000).
+  -f, --filter TEXT        CQL2 text filter expression.
+      --s-intersect TEXT   WKT geometry for S_INTERSECTS spatial filter.
+      --aoi PATH           GeoJSON file with 1-5 polygon(s) for spatial filter.
+  -o, --output TEXT        Output GeoJSON filename.
+      --search-method      Search backend: itemsearch or catalog-search.
+  -e, --env TEXT           Environment: prod (default) or staging.
+  -dl, --download_dir TEXT Accepted for CLI parity; not used in this script.
+  -h, --help               Show this message and exit.
+```
+
+```bash
+# ItemSearch path (collection items endpoint)
+python tests/pystac_client_test.py --search-method itemsearch -c rcm-ard -l 1000 -d "2025-01-01/2026-05-01" -e staging
+
+# catalog.search path
+python tests/pystac_client_test.py --search-method catalog-search -c rcm-ard -l 1000 -d "2025-01-01/2026-05-01" -e staging
+
+# Match reported URL parameters (limit + datetime)
+python tests/pystac_client_test.py --search-method itemsearch -c rcm-ard -l 100 -d "2025-01-01T00:00:00Z/2025-05-01T23:59:59Z" -e staging
+```
+
 ### Run features_dds_test.py
 
 Browses the EODMS OGC Features API directly (without pystac-client) with page-token pagination, and downloads a specific feature via DDS.
