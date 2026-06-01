@@ -15,7 +15,7 @@ from .errors import CatalogError, SearchError
 class Search_API:
 	@staticmethod
 	def _default_user_agent() -> str:
-		return f"{requests.utils.default_user_agent()} py-eodms-dds/{__version__}"
+		return f"{requests.utils.default_user_agent()} eodms-py/{__version__}"
 
 	def search_multiple_geometries(
 		self,

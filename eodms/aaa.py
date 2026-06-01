@@ -225,7 +225,7 @@ class AAA_API():
     @staticmethod
     def _default_user_agent():
         """Build package User-Agent suffix on top of requests default."""
-        return f"{requests.utils.default_user_agent()} py-eodms-dds/{__version__}"
+        return f"{requests.utils.default_user_agent()} eodms-py/{__version__}"
 
     def _build_user_agent(self, custom_user_agent=None):
         default_ua = self._default_user_agent()
@@ -233,10 +233,10 @@ class AAA_API():
         if not custom_user_agent:
             return default_ua
 
-        if f"py-eodms-dds/{__version__}" in custom_user_agent:
+        if f"eodms-py/{__version__}" in custom_user_agent:
             return custom_user_agent
 
-        return f"{custom_user_agent} py-eodms-dds/{__version__}"
+        return f"{custom_user_agent} eodms-py/{__version__}"
 
     def get_default_headers(self, headers=None):
         """Return request headers with User-Agent populated."""

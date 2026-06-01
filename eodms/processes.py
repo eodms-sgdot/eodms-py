@@ -30,7 +30,7 @@ class Processes_API:
 
     @staticmethod
     def _default_user_agent() -> str:
-        return f"{requests.utils.default_user_agent()} py-eodms-dds/{__version__}"
+        return f"{requests.utils.default_user_agent()} eodms-py/{__version__}"
 
     def _apply_user_agent(self, headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         if self.aaa is not None:
