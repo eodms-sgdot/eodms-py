@@ -10,7 +10,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from eodms import AAA_API, Processes_API
+from eodms import AAA_API, Processes_API, api_logger
+from eodms.errors import ProcessingError
+
+
+api_logger.configure_logging(log_file=os.path.join(os.path.expanduser('~'), '.eodms', 'eodms.log'))
 
 
 def _load_json_input(raw: Optional[str], label: str) -> Optional[Dict[str, Any]]:
@@ -359,6 +363,9 @@ def cli(
         )
     except click.UsageError:
         raise
+    except ProcessingError as e:
+        click.echo(f"Service error: {e}", err=True)
+        raise SystemExit(2)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(1)

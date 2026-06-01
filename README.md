@@ -13,7 +13,7 @@ pip install git+https://github.com/eodms-sgdot/eodms-py.git
 
 ### Get and Download Image
 
-> **_NOTE:_** Before using the DDS API, you'll need to get the UUID of an RCM image product. You can use the [py-eodms-rapi](https://github.com/eodms-sgdot/py-eodms-rapi) (see [rapi_dds_test.py](./tests/rapi_dds_test.py) for example code).
+> **_NOTE:_** Before using the DDS API, you'll need a valid item UUID for the target collection. You can discover UUIDs with [stac_dds_test.py](./tests/stac_dds_test.py) and then download via DDS.
 
 ```python
 from eodms import aaa, dds
@@ -55,6 +55,52 @@ search_api.stac_search(collections=None)
 ```
 
 For a full search-and-download example see [stac_dds_test.py](./tests/stac_dds_test.py) and [features_dds_test.py](./tests/features_dds_test.py).
+
+### For External CLI Integrators
+
+The package and wrapper responsibilities are intentionally separated:
+
+- Package (`eodms`): emits logs on `eodms.*` loggers and raises typed exceptions.
+- Wrapper CLI: configures handlers/format/level, catches exceptions, and decides exit codes/user-facing messages.
+
+By default, the package uses a `NullHandler`, so importing it will not force log output. External CLIs can either configure Python logging globally or call `api_logger.configure_logging(...)` explicitly.
+
+```python
+import logging
+import os
+import sys
+
+from eodms import AAA_API, DDSError, Search_API, SearchError, CatalogError
+
+
+def main() -> int:
+  # Wrapper-owned logging policy.
+  logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+  )
+
+  try:
+    aaa_api = AAA_API(os.environ["EODMS_USERNAME"], os.environ["EODMS_PASSWORD"])
+    search_api = Search_API(aaa_api=aaa_api, environment="prod")
+
+    items = search_api.stac_search(collections=["RCMImageProducts"], limit=5)
+    print(f"Found {len(items)} items")
+    return 0
+  except CatalogError as exc:
+    logging.getLogger("cli").error("Catalog initialization failed: %s", exc)
+    return 2
+  except SearchError as exc:
+    logging.getLogger("cli").error("Search failed: %s", exc)
+    return 3
+  except DDSError as exc:
+    logging.getLogger("cli").error("DDS failed: %s", exc)
+    return 4
+
+
+if __name__ == "__main__":
+  raise SystemExit(main())
+```
 
 ### Run OGC Processes Jobs (RADARSAT-1 L1)
 
@@ -113,37 +159,9 @@ cd eodms-py
 pip install -e .
 ```
 
-### Run rapi_dds_test.py
-
-This test gets an image item from the EODMS RAPI, parses the metadata and uses the UUID to download the image using the EODMS DDS API.
-
-For this test script, you will need to install the [py-eodms-rapi](https://github.com/eodms-sgdot/py-eodms-rapi) package:
-
-```bash
-pip install py-eodms-rapi -U
-```
-
-```
-Usage: rapi_dds_test.py [OPTIONS]
-
-  Used for CLI input.
-
-Options:
-  -u, --username TEXT    The EODMS username.  [required]
-  -p, --password TEXT    The EODMS password.  [required]
-  -c, --collection TEXT  The collection name.  [required]
-  -e, --env TEXT         The AWS environment (default is "prod").
-  -o, --out_folder TEXT  The output folder (default is the current folder).
-  -h, --help             Show this message and exit.
-```
-
-```bash
-python rapi_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts
-```
-
 ### Run stac_dds_test.py
 
-Searches the EODMS STAC catalog using the OGC Features items endpoint (paginated) and downloads the first result via DDS. Omitting `--collection` lists all available collections and their queryable fields.
+Searches the EODMS STAC catalog using the OGC Features items endpoint (paginated) and downloads the first result via DDS. Use `--queryables` to list available collections and queryable fields.
 
 ```
 Usage: stac_dds_test.py [OPTIONS]
@@ -155,6 +173,8 @@ Options:
   -p, --password TEXT      The EODMS password.
   -c, --collection TEXT    The collection name.
       --uuid TEXT          UUID of the image to download (skips search).
+      --queryables         List available STAC collections and queryable
+                 fields, then exit.
   -d, --datetime TEXT      Temporal filter as ISO 8601 string or range
                            (e.g., "2023-01-01/2023-12-31").
   -b, --bbox TEXT          Bounding box: west,south,east,north
@@ -172,7 +192,7 @@ Options:
 
 ```bash
 # List all collections and queryable fields
-python stac_dds_test.py
+python stac_dds_test.py --queryables
 
 # Search and download first RCM image
 python stac_dds_test.py -u eodms_user -p eodms_pwd -c RCMImageProducts

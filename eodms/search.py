@@ -2,12 +2,20 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
+import requests
 from pystac_client import Client, ItemSearch
+from pystac_client.exceptions import APIError
 from pystac_client.stac_api_io import StacApiIO
 
+from . import api_logger
 from . import config
+from .__version__ import __version__
+from .errors import CatalogError, SearchError
 
 class Search_API:
+	@staticmethod
+	def _default_user_agent() -> str:
+		return f"{requests.utils.default_user_agent()} py-eodms-dds/{__version__}"
 
 	def search_multiple_geometries(
 		self,
@@ -29,7 +37,7 @@ class Search_API:
 			geometry_wkt = geometry_entry.get('wkt')
 			if geometry_wkt:
 				label = geometry_name if geometry_name else f"polygon {idx}"
-				print(f"Searching AOI geometry: {label}")
+				self.logger.info(f"Searching AOI geometry: {label}")
 			parsed_filter = self.compose_filter(filter_text=filter_text, geometry_wkt=geometry_wkt)
 			items = self.stac_search(
 				collections=[collection] if collection else None,
@@ -52,22 +60,58 @@ class Search_API:
 		domain = domain_config['domain']
 		self.search_endpoint = f"{domain}/search"
 		verify_ssl = domain_config.get('verify_ssl', True)
+		self.logger = api_logger.EODMSLogger('eodms_search', api_logger.get_logger('search'))
 
 		stac_api_io = StacApiIO()
 		stac_api_io.session.verify = verify_ssl
+		stac_api_io.session.headers.update({"User-Agent": self._default_user_agent()})
+		self.logger.debug(
+			f"Outbound User-Agent: {stac_api_io.session.headers.get('User-Agent')}"
+		)
 
+		auth_enabled = False
 		if aaa_api:
 			access_token = aaa_api.get_access_token()
 			if access_token:
+				stac_api_io.session.headers.update(
+					aaa_api.get_default_headers(stac_api_io.session.headers)
+				)
+				self.logger.debug(
+					f"Outbound User-Agent: {stac_api_io.session.headers.get('User-Agent')}"
+				)
 				stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
-				print(f"Using authenticated catalog: {self.search_endpoint}")
+				auth_enabled = True
+				self.logger.info(f"Using authenticated catalog: {self.search_endpoint}")
 			else:
-				print("Authentication token unavailable; using unauthenticated catalog access.")
-				print(f"Using unauthenticated catalog: {self.search_endpoint}")
+				if getattr(aaa_api, "last_error", None) is not None:
+					self.logger.warning(f"Authentication unavailable; continuing unauthenticated. Details: {aaa_api.last_error}")
+				self.logger.warning("Authentication token unavailable; using unauthenticated catalog access.")
+				self.logger.info(f"Using unauthenticated catalog: {self.search_endpoint}")
 		else:
-			print(f"Using unauthenticated catalog: {self.search_endpoint}")
+			self.logger.info(f"Using unauthenticated catalog: {self.search_endpoint}")
 
-		self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
+		try:
+			self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
+		except (APIError, Exception) as e:
+			if auth_enabled:
+				# Fallback when AAA is temporarily unhealthy or token is invalid/expired.
+				self.logger.error(
+					"Authenticated catalog initialization failed; "
+					"retrying unauthenticated access. "
+					f"Details: {e}"
+				)
+				stac_api_io.session.headers.pop("Authorization", None)
+				self.logger.info(f"Using unauthenticated catalog: {self.search_endpoint}")
+				try:
+					self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
+				except Exception as fallback_error:
+					self.logger.error(f"Unauthenticated catalog initialization failed: {fallback_error}")
+					raise CatalogError(
+						f"Unable to initialize STAC catalog after authentication fallback: {fallback_error}"
+					) from fallback_error
+			else:
+				self.logger.error(f"Catalog initialization failed: {e}")
+				raise CatalogError(f"Unable to initialize STAC catalog: {e}") from e
 		self.client.add_conforms_to("FILTER")
 		self.client.add_conforms_to("QUERY")
 
@@ -194,8 +238,9 @@ class Search_API:
 		return "2020-01-01T00:00:00Z"
 
 
-	"""Print queryable fields for a collection, including type and any constraints like enums or numeric ranges."""
-	def print_queryables(self, collection: Any) -> None:
+	"""Build queryable field lines for a collection, including type and constraints."""
+	def _build_queryables_lines(self, collection: Any) -> List[str]:
+		lines: List[str] = []
 		try:
 			queryables = collection.get_queryables()
 			properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
@@ -224,19 +269,32 @@ class Search_API:
 							constraint_parts.append(f"pattern={pattern}")
 					example_expr = Search_API.build_cql2_example(field_name, field_schema, collection)
 					constraints_text = f" | constraints: {'; '.join(constraint_parts)}" if constraint_parts else ""
-					print(f"      * {field_name} ({field_type}) e.g. {example_expr}{constraints_text}")
+					lines.append(f"      * {field_name} ({field_type}) e.g. {example_expr}{constraints_text}")
 			else:
-				print("      * No queryable properties returned")
+				lines.append("      * No queryable properties returned")
 		except Exception as e:
-			print(f"      * Queryables not available: {e}")
+			lines.append(f"      * Queryables not available: {e}")
+
+		return lines
+
+	"""Print queryable fields for a collection as a single log entry."""
+	def print_queryables(self, collection: Any) -> None:
+		collection_id = getattr(collection, "id", "unknown")
+		lines = [f"Collection '{collection_id}' queryables:"]
+		lines.extend(self._build_queryables_lines(collection))
+		self.logger.info("\n".join(lines))
 
 	"""Print all available collections and their queryable fields."""
 	def print_collections(self) -> None:
 		"""Print all available collections and their queryable fields."""
 		available_collections = list(self.client.get_collections())
-		print("Available collections and queryables:")
+		lines = ["Available collections and queryables:"]
 		for collection in available_collections:
-			self.print_queryables(collection)
+			collection_id = getattr(collection, "id", "unknown")
+			lines.append(f"  - Collection: {collection_id}")
+			lines.extend(self._build_queryables_lines(collection))
+
+		self.logger.info("\n".join(lines))
 			
 
 	@staticmethod
@@ -303,7 +361,7 @@ class Search_API:
 			search_params['datetime'] = datetime
 		# Server does not support STAC sort extension; ignore any sortby requests.
 		if sortby is not None or 'sortby' in kwargs:
-			print("sortby is not supported by this server and will be ignored.")
+			self.logger.warning("sortby is not supported by this server and will be ignored.")
 		kwargs.pop('sortby', None)
 
 		search_params.update(kwargs)
@@ -312,7 +370,7 @@ class Search_API:
 			items: List[Dict[str, Any]] = []
 			seen_item_ids = set()
 			seen_pages = set()
-			print(f"Searching up to limit of {limit}...")
+			self.logger.info(f"Searching up to limit of {limit}...")
 			filter_text = kwargs.get('filter')
 			page_count = 0
 
@@ -322,7 +380,7 @@ class Search_API:
 
 				collection = self.client.get_collection(collection_id)
 				if collection is None:
-					print(f"Collection not found: {collection_id}")
+					self.logger.warning(f"Collection not found: {collection_id}")
 					continue
 
 				if filter_text:
@@ -331,13 +389,13 @@ class Search_API:
 					if invalid_fields:
 						properties = queryables.get("properties", {}) if isinstance(queryables, dict) else {}
 						valid_fields = sorted(properties.keys())
-						print(
+						self.logger.warning(
 							f"Invalid filter field(s) for collection '{collection_id}': {', '.join(invalid_fields)}"
 						)
 						if valid_fields:
-							print(f"Available queryable fields: {', '.join(valid_fields)}")
+							self.logger.info(f"Available queryable fields: {', '.join(valid_fields)}")
 						else:
-							print("No queryable fields are available for this collection.")
+							self.logger.info("No queryable fields are available for this collection.")
 						continue
 
 				remaining = limit - len(items)
@@ -349,7 +407,7 @@ class Search_API:
 					**search_params,
 				)
 
-				print(unquote(item_search.url_with_parameters()))
+				self.logger.debug(unquote(item_search.url_with_parameters()))
 
 				for page in item_search.pages_as_dicts():
 					page_count += 1
@@ -375,7 +433,7 @@ class Search_API:
 							page_token = vals[0]
 
 					if page_token is not None and page_token in seen_pages:
-						print(
+						self.logger.warning(
 							"Detected repeated page token during pagination; "
 							"stopping to avoid an infinite loop."
 						)
@@ -401,42 +459,42 @@ class Search_API:
 						if len(items) >= limit:
 							break
 
-					print(
+					self.logger.info(
 						f"Page {page_count} ({page_token}): ({len(items)} collected so far)"
 					)
 					if len(items) >= limit:
 						break
 
-			print(f"Found {len(items)} items (limited to {limit})")
+			self.logger.info(f"Found {len(items)} items (limited to {limit})")
 		except Exception as e:
-			print(f"Search error: {e}")
-			return []
+			self.logger.error(f"Search error: {e}")
+			raise SearchError(f"STAC search failed: {e}") from e
 
 		return items
 
 	def get_item(self, collection: str, item_uuid: str) -> Optional[Dict[str, Any]]:
 		"""Get a single STAC item by collection ID and item UUID."""
 		if not collection:
-			print("Collection is required.")
+			self.logger.error("Collection is required.")
 			return None
 		if not item_uuid:
-			print("item_uuid is required.")
+			self.logger.error("item_uuid is required.")
 			return None
 
 		try:
 			collection_obj = self.client.get_collection(collection)
 			if collection_obj is None:
-				print(f"Collection not found: {collection}")
+				self.logger.warning(f"Collection not found: {collection}")
 				return None
 
 			item = collection_obj.get_item(item_uuid)
 			if item is None:
-				print(f"Item not found: {collection}/{item_uuid}")
+				self.logger.warning(f"Item not found: {collection}/{item_uuid}")
 				return None
 
 			return item.to_dict() if hasattr(item, "to_dict") else item
 		except Exception as e:
-			print(f"Get item error: {e}")
+			self.logger.error(f"Get item error: {e}")
 			return None
 
 

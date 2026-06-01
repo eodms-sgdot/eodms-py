@@ -1,4 +1,6 @@
 import os
+import logging
+import sys
 import warnings
 from datetime import datetime, timedelta, timezone
 
@@ -62,6 +64,15 @@ def _make_api_with_client(fake_client: _FakeClient) -> Search_API:
     api = object.__new__(Search_API)
     api.client = fake_client
     api.search_endpoint = "https://example.test/search"
+    # Tests bypass Search_API.__init__, so attach a minimal stdout logger.
+    logger = logging.getLogger(f"eodms.test.search.{id(api)}")
+    logger.handlers.clear()
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    api.logger = logger
     return api
 
 
@@ -359,8 +370,8 @@ def test_stac_search_prints_progress_for_each_page(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert items == [{"id": "item-1"}, {"id": "item-2"}, {"id": "item-3"}]
-    assert "Fetched page 1 for RCMImageProducts: 2 items (0 collected so far)" in captured.out
-    assert "Fetched page 2 for RCMImageProducts: 1 items (2 collected so far)" in captured.out
+    assert "Page 1 (None): (2 collected so far)" in captured.out
+    assert "Page 2 (None): (3 collected so far)" in captured.out
 
 
 def test_get_item_returns_item_when_found():

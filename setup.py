@@ -2,9 +2,9 @@ from setuptools import find_packages, setup
 
 setup(
     name='eodms-py',
-    version='0.5.1', 
-    author='Kevin Ballantyne (Natural Resources Canada)',
-    author_email='kevin.ballantyne@nrcan-rncan.gc.ca',
+    version='2026.05.29', 
+    author='EODMS (Natural Resources Canada)',
+    author_email='eodms-sgdot@nrcan-rncan.gc.ca',
     packages=find_packages(),
     include_package_data=True, 
     # url='https://py-eodms-rapi.readthedocs.io/en/latest/',

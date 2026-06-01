@@ -13,7 +13,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from eodms import dds, aaa, search
+from eodms import api_logger, dds, aaa, search
+from eodms.errors import CatalogError, DDSError, SearchError
+
+
+api_logger.configure_logging(
+    level=os.getenv('EODMS_LOG_LEVEL', 'INFO'),
+    log_file=os.path.join(os.path.expanduser('~'), '.eodms', 'eodms.log')
+)
 
 
 def parse_aoi_file(aoi_file: str) -> List[Dict[str, Any]]:
@@ -42,8 +49,11 @@ def parse_aoi_file(aoi_file: str) -> List[Dict[str, Any]]:
 
 
 def download(dds_api, collection, item_uuid, download_dir):
-
-    item_info = dds_api.get_item(collection, item_uuid)
+    try:
+        item_info = dds_api.get_item(collection, item_uuid)
+    except DDSError as e:
+        print(f"DDS request failed: {e}")
+        return None
     
     if item_info is None:
         print(f"Item not found: Collection={collection}, Feature ID={item_uuid}")
@@ -53,7 +63,11 @@ def download(dds_api, collection, item_uuid, download_dir):
         print(f"No download URL found for item: Collection={collection}, Feature ID={item_uuid} item_info={item_info}")
         return None
 
-    dds_api.download_item(os.path.abspath(download_dir))
+    try:
+        dds_api.download_item(os.path.abspath(download_dir))
+    except DDSError as e:
+        print(f"DDS download failed: {e}")
+        return None
 
     return item_info
 
@@ -77,6 +91,7 @@ def run(
     collection,
     env,
     download_dir,
+    queryables=False,
     datetime_range=None,
     bbox=None,
     uuid=None,
@@ -90,6 +105,19 @@ def run(
     aaa_api = aaa.AAA_API(eodms_user, eodms_pwd, env) if eodms_user and eodms_pwd else None
 
     dds_api = dds.DDS_API(aaa_api, env)
+
+    if queryables:
+        try:
+            search_api = search.Search_API(aaa_api, env)
+        except CatalogError as e:
+            print(f"Search API initialization failed: {e}")
+            return
+
+        if aaa_api and aaa_api.last_error is not None:
+            print(f"Authentication unavailable; continuing with public catalog access: {aaa_api.last_error}")
+
+        search_api.print_collections()
+        return
 
     # If UUID is provided, skip search and download directly
     if uuid:
@@ -113,15 +141,27 @@ def run(
         s_intersect_list = [{'name': None, 'wkt': None}]
     
     # Search using pystac_client with shared AAA instance
-    search_api = search.Search_API(aaa_api, env)
-    items = search_api.search_multiple_geometries(
-        s_intersect_list=s_intersect_list,
-        collection=collection,
-        datetime_range=datetime_range,
-        bbox=bbox,
-        limit=limit,
-        filter_text=filter_text,
-    )
+    try:
+        search_api = search.Search_API(aaa_api, env)
+    except CatalogError as e:
+        print(f"Search API initialization failed: {e}")
+        return
+
+    if aaa_api and aaa_api.last_error is not None:
+        print(f"Authentication unavailable; continuing with public catalog access: {aaa_api.last_error}")
+
+    try:
+        items = search_api.search_multiple_geometries(
+            s_intersect_list=s_intersect_list,
+            collection=collection,
+            datetime_range=datetime_range,
+            bbox=bbox,
+            limit=limit,
+            filter_text=filter_text,
+        )
+    except SearchError as e:
+        print(f"Search failed: {e}")
+        return
     if not items:
         items = None
 
@@ -141,6 +181,8 @@ def run(
 @click.option('--password', '-p', required=False, help='The EODMS password.')
 @click.option('--collection', '-c', required=False, help='The collection name.', default=None)
 @click.option('--uuid', required=False, default=None, help='The UUID of the image to download (skips search).')
+@click.option('--queryables', is_flag=True,
+              help='List available STAC collections and queryable fields, then exit.')
 @click.option('--datetime', '-d', required=False, default=None,
               help='Temporal filter as ISO 8601 string or range (e.g., "2023-01-01/2023-12-31").')
 @click.option('--bbox', '-b', required=False, default=None,
@@ -158,12 +200,16 @@ def run(
 @click.option('--env', '-e', required=False, default='prod', help='Defaults to "prod". If "staging", define `EODMS_STAGING_DOMAIN` env variable.')
 @click.option('--download_dir', '-dl', required=False, default='.',
               help='The download directory.')
-def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text, s_intersect, aoi, output, env, download_dir):
+def cli(username, password, collection, uuid, queryables, datetime, bbox, limit, filter_text, s_intersect, aoi, output, env, download_dir):
     """
     Search and Download images from EODMS STAC catalog and DDS.
     
     Examples:
     
+    \b
+    # List collections and queryable fields
+    python stac_dds_test.py --queryables
+
     \b
     # Search and download first RCM image
     python stac_dds_test.py -u USER -p PASS -c RCMImageProducts
@@ -219,6 +265,7 @@ def cli(username, password, collection, uuid, datetime, bbox, limit, filter_text
         collection,
         env,
         download_dir,
+        queryables,
         datetime,
         bbox_list,
         uuid,

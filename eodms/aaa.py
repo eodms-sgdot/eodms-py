@@ -9,6 +9,7 @@ import dateparser
 from . import api_logger
 from .__version__ import __version__
 from . import config
+from .errors import AAAError
 
 class AAA_Creds():
     """Authentication Authorization and Accounting (AAA) credentials management class."""
@@ -23,7 +24,7 @@ class AAA_Creds():
 
         self.cred_fn = None
 
-        self.logger = api_logger.EODMSLogger('eodms_aaa', api_logger.eodms_logger)
+        self.logger = api_logger.EODMSLogger('eodms_aaa', api_logger.get_logger('aaa'))
 
     def get_json(self, with_seconds=False):
         """
@@ -170,7 +171,7 @@ class AAA_API():
         """
 
         self.aaa_creds = AAA_Creds()
-        self.logger = api_logger.EODMSLogger('eodms_aaa', api_logger.eodms_logger)
+        self.logger = api_logger.EODMSLogger('eodms_aaa', api_logger.get_logger('aaa'))
 
         self.username = username
         self.password = password
@@ -188,6 +189,62 @@ class AAA_API():
 
         self.login_success = True
         self.response = None
+        self.last_error = None
+
+    def _record_error(self, message, status_code=None):
+        self.last_error = AAAError(message, status_code=status_code)
+        self.login_success = False
+
+    @staticmethod
+    def _response_preview(resp, max_len=250):
+        """Return concise response details for logging/debugging."""
+        if resp is None:
+            return "response=N/A"
+
+        content_type = resp.headers.get('Content-Type', 'unknown')
+        body = (resp.text or '').strip().replace("\n", " ")
+        if len(body) > max_len:
+            body = f"{body[:max_len]}..."
+
+        return (
+            f"status={resp.status_code}, content_type={content_type}, "
+            f"body_preview={body!r}"
+        )
+
+    def _safe_json(self, resp, context):
+        """Parse response JSON without raising if server returns invalid content."""
+        try:
+            return resp.json()
+        except ValueError as e:
+            self.logger.error(
+                f"{context}: invalid JSON from AAA server ({e}). "
+                f"{self._response_preview(resp)}"
+            )
+            return None
+
+    @staticmethod
+    def _default_user_agent():
+        """Build package User-Agent suffix on top of requests default."""
+        return f"{requests.utils.default_user_agent()} py-eodms-dds/{__version__}"
+
+    def _build_user_agent(self, custom_user_agent=None):
+        default_ua = self._default_user_agent()
+
+        if not custom_user_agent:
+            return default_ua
+
+        if f"py-eodms-dds/{__version__}" in custom_user_agent:
+            return custom_user_agent
+
+        return f"{custom_user_agent} py-eodms-dds/{__version__}"
+
+    def get_default_headers(self, headers=None):
+        """Return request headers with User-Agent populated."""
+        out_headers = dict(headers or {})
+        out_headers["User-Agent"] = self._build_user_agent(
+            out_headers.get("User-Agent")
+        )
+        return out_headers
 
     def get_access_token(self):
         """
@@ -226,14 +283,20 @@ class AAA_API():
             self._refresh()
 
         if not self.login_success:
-            self.logger.warning("WARNING: Could not access current AAA "
+            self.logger.error("Could not access current AAA "
                   f"session with existing tokens in {self.aaa_creds.cred_fn}")
+            return None
             
         # self._print_response()
 
         return self.aaa_creds.access_token
     
     def prepare_request(self, url, method='GET', **kwargs):
+
+        kwargs['headers'] = self.get_default_headers(kwargs.get('headers'))
+        self.logger.debug(
+            f"Outbound User-Agent: {kwargs['headers'].get('User-Agent')}"
+        )
 
         req = requests.Request(method, url, **kwargs)
         
@@ -296,15 +359,31 @@ class AAA_API():
         #self.logger.info(f"Logging into {url} (user {self.username} pass {self.password})...")
 
         # resp = requests.post(url, json=payload, trust_env=False, verify=False) #, verify=False)
-        resp = self.prepare_request(url, "POST", json=payload)
+        try:
+            resp = self.prepare_request(url, "POST", json=payload)
+        except Exception as e:
+            self.logger.error(f"AAA login request failed: {e}")
+            self._record_error(f"AAA login request failed: {e}")
+            return
 
         if resp.status_code == 200:
             self.logger.info("Successfully logged in using AAA API")
 
-            self.response = resp.json()
+            self.response = self._safe_json(resp, "AAA login response parse error")
+            if not isinstance(self.response, dict):
+                self.logger.error("AAA login returned an unexpected response format; cannot update tokens.")
+                self._record_error("AAA login returned an unexpected response format.", status_code=resp.status_code)
+                return
 
             new_access_token = self.response.get('access_token')
             new_refresh_token = self.response.get('refresh_token')
+            if not new_access_token or not new_refresh_token:
+                self.logger.error(
+                    "AAA login response missing access_token or refresh_token. "
+                    f"{self._response_preview(resp)}"
+                )
+                self._record_error("AAA login response missing access_token or refresh_token.", status_code=resp.status_code)
+                return
             # new_access_exp = self.access_exp.isoformat()
 
             # try:
@@ -316,14 +395,17 @@ class AAA_API():
                                 refresh_token=new_refresh_token)
 
             self.login_success = True
+            self.last_error = None
 
         else:
-            err_json = resp.json()
-            error = err_json.get('error')
-            msg = err_json.get('message')
-            self.logger.warning(f"WARNING: Login failed for user {self.username} using "
+            err_json = self._safe_json(resp, "AAA login error response parse error") or {}
+            error = err_json.get('error', 'unknown_error')
+            msg = err_json.get('message', 'No message returned')
+            failure_message = f"Login failed for user {self.username} using AAA API: {error}: {msg}"
+            self.logger.error(f"Login failed for user {self.username} using "
                   f"AAA API: {error}: {msg}")
-            self.login_success = False
+            self.logger.error(f"AAA login failure details: {self._response_preview(resp)}")
+            self._record_error(failure_message, status_code=resp.status_code)
 
             if resp.status_code == 429:
                 self.logger.info("Attempting to get new Access Token "
@@ -341,26 +423,45 @@ class AAA_API():
         # resp = requests.get(url, verify=False)
 
         headers = {"Authorization": f"Bearer {self.aaa_creds.refresh_token}"}
-        resp = self.prepare_request(url, headers=headers)
+        try:
+            resp = self.prepare_request(url, headers=headers)
+        except Exception as e:
+            self.logger.error(f"AAA refresh request failed: {e}")
+            self._record_error(f"AAA refresh request failed: {e}")
+            return
 
         if resp.status_code == 200:
             self.logger.info("Successfully refreshed using AAA API")
-            self.response = resp.json()
+            self.response = self._safe_json(resp, "AAA refresh response parse error")
+            if not isinstance(self.response, dict):
+                self.logger.error("AAA refresh returned an unexpected response format; cannot update tokens.")
+                self._record_error("AAA refresh returned an unexpected response format.", status_code=resp.status_code)
+                return
 
             new_access_token = self.response.get('access_token')
             new_refresh_token = self.response.get('refresh_token')
+            if not new_access_token or not new_refresh_token:
+                self.logger.error(
+                    "AAA refresh response missing access_token or refresh_token. "
+                    f"{self._response_preview(resp)}"
+                )
+                self._record_error("AAA refresh response missing access_token or refresh_token.", status_code=resp.status_code)
+                return
 
             self._update_tokens(access_token=new_access_token,
                                 refresh_token=new_refresh_token)
 
             self.login_success = True
+            self.last_error = None
         else:
-            err_json = resp.json()
-            error = err_json.get('error')
-            msg = err_json.get('message')
-            self.logger.error("WARNING: Failed to refresh using "
+            err_json = self._safe_json(resp, "AAA refresh error response parse error") or {}
+            error = err_json.get('error', 'unknown_error')
+            msg = err_json.get('message', 'No message returned')
+            failure_message = f"Failed to refresh using AAA API: {error}: {msg}"
+            self.logger.error("Failed to refresh using "
                   f"AAA API: {error}: {msg}")
-            self.login_success = False
+            self.logger.error(f"AAA refresh failure details: {self._response_preview(resp)}")
+            self._record_error(failure_message, status_code=resp.status_code)
 
 
         

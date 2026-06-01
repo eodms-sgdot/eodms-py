@@ -10,6 +10,7 @@ from urllib.parse import urlparse, parse_qs
 from . import aaa
 from . import api_logger
 from . import config
+from .errors import DDSError
 
 class DDS_API():
     """Client for the EODMS Data Delivery Service (DDS) API."""
@@ -33,6 +34,8 @@ class DDS_API():
         url = f"{self.domain}/dds/v1/item/{catalog}/{collection}/{item_uuid}"
 
         access_token = self.aaa.get_access_token()
+        if not access_token:
+            raise DDSError("DDS access token unavailable.")
         headers = {"Authorization": f"Bearer {access_token}"}
         # resp = requests.get(url, headers=headers, trust_env=False, verify=False)
         resp = self.aaa.prepare_request(url, headers=headers)
@@ -41,31 +44,34 @@ class DDS_API():
             self.logger.info(f"Successfully got item {collection}/{item_uuid}")
             try:
                 self.img_info = resp.json()
-            except:
-                resp_text = resp.text
-                if resp_text.content.startswith('<HTML>'):
-                    self.logger.info("DDS API cannot be accessed at this time.")
-                    return None
+            except Exception as exc:
+                resp_text = resp.text or ""
+                if resp_text.lstrip().upper().startswith('<HTML>'):
+                    raise DDSError("DDS API returned HTML instead of JSON.") from exc
+                raise DDSError("DDS API returned invalid JSON.") from exc
         elif resp.status_code == 202:
-            self.img_info = resp.json()
+            try:
+                self.img_info = resp.json()
+            except Exception as exc:
+                raise DDSError("DDS API returned invalid JSON for accepted item response.") from exc
             status = self.img_info.get('status')
             self.logger.info(f"{collection}/{item_uuid} is being prepared; current"
                   f"status is {status}.")
         else:
             try:
                 err_json = resp.json()
-                error = err_json.get('error')
-                msg = err_json.get('message')
-                request_id = err_json.get('request_id')
-                trace_id = err_json.get('trace_id')
                 self.logger.error(err_json)
                 self.logger.error(f"Failed to get {collection}/{item_uuid}\n")
-            except:
+                raise DDSError(
+                    f"Failed to get {collection}/{item_uuid}: {err_json}"
+                )
+            except ValueError as exc:
                 self.logger.error("Failed to get item using DDS API\n")
-                #  self.logger.error(f"resp: {resp.content}")
-                return None
+                raise DDSError(
+                    f"Failed to get {collection}/{item_uuid}: HTTP {resp.status_code} {resp.text}"
+                ) from exc
 
-        return resp.json()
+        return self.img_info
 
     def download_item(self, out_folder) -> str:
         """
@@ -74,20 +80,31 @@ class DDS_API():
         """
 
         if self.img_info is None:
-            self.logger.error("ERROR: No image info available.\n")
-            return None
+            self.logger.error("No image info available.\n")
+            raise DDSError("No image info available for download.")
 
         download_url = self.img_info.get('download_url')
 
         if not download_url:
-            return None
+            raise DDSError("DDS item response does not include a download URL.")
 
         url_parsed = urlparse(download_url)
         dest_fn = os.path.join(out_folder, os.path.basename(url_parsed.path))
 
         self.logger.info(f"Downloading image to {dest_fn}...\n")
 
-        with requests.get(download_url, stream=True, verify=self.verify_ssl) as stream:
+        headers = self.aaa.get_default_headers()
+        self.logger.debug(
+            f"Outbound User-Agent: {headers.get('User-Agent')}"
+        )
+
+        with requests.get(
+            download_url,
+            stream=True,
+            verify=self.verify_ssl,
+            headers=headers,
+        ) as stream:
+            stream.raise_for_status()
             with open(dest_fn, 'wb') as pipe:
                 with tqdm.wrapattr(
                         pipe,

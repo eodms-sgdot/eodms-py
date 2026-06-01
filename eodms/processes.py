@@ -10,6 +10,8 @@ from tqdm.auto import tqdm
 
 from . import api_logger
 from . import config
+from .__version__ import __version__
+from .errors import ProcessingError
 
 
 class Processes_API:
@@ -25,6 +27,18 @@ class Processes_API:
 
         self.aaa = aaa_api
         self.logger = api_logger.EODMSLogger('eodms_processes', api_logger.eodms_logger)
+
+    @staticmethod
+    def _default_user_agent() -> str:
+        return f"{requests.utils.default_user_agent()} py-eodms-dds/{__version__}"
+
+    def _apply_user_agent(self, headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        if self.aaa is not None:
+            return self.aaa.get_default_headers(headers)
+
+        out_headers = dict(headers or {})
+        out_headers['User-Agent'] = self._default_user_agent()
+        return out_headers
 
     def _send_request(
         self,
@@ -44,12 +58,17 @@ class Processes_API:
 
         if requires_auth:
             if self.aaa is None:
-                raise ValueError("This operation requires AAA_API authentication.")
+                raise ProcessingError("This operation requires AAA_API authentication.")
             access_token = self.aaa.get_access_token()
+            if not access_token:
+                raise ProcessingError("Processes API access token unavailable.")
             headers['Authorization'] = f"Bearer {access_token}"
 
         if json_payload is not None:
             headers['Content-Type'] = 'application/json'
+
+        headers = self._apply_user_agent(headers)
+        self.logger.debug(f"Outbound User-Agent: {headers.get('User-Agent')}")
 
         if self.aaa is not None:
             return self.aaa.prepare_request(
@@ -74,12 +93,12 @@ class Processes_API:
                 err = resp.json()
             except Exception:
                 err = {'message': resp.text}
-            raise RuntimeError(f"Request failed [{resp.status_code}]: {json.dumps(err)}")
+            raise ProcessingError(f"Request failed [{resp.status_code}]: {json.dumps(err)}")
 
         try:
             return resp.json()
         except Exception as exc:
-            raise RuntimeError("Response body is not valid JSON.") from exc
+            raise ProcessingError("Response body is not valid JSON.") from exc
 
     def list_processes(self) -> Dict[str, Any]:
         """List available processing services from /processing/processes."""
@@ -175,7 +194,7 @@ class Processes_API:
 
         while True:
             if time.time() - start_ts > timeout:
-                raise TimeoutError(f"Job monitoring timed out after {timeout} seconds")
+                raise ProcessingError(f"Job monitoring timed out after {timeout} seconds")
 
             status_json = self.get_job_status(job_id)
             status = str(status_json.get('status', 'unknown'))
@@ -243,7 +262,10 @@ class Processes_API:
         return parsed.netloc, parsed.path.lstrip('/')
 
     def _download_http_file(self, url: str, out_file: str) -> str:
-        with requests.get(url, stream=True, verify=self.verify_ssl) as stream:
+        headers = self._apply_user_agent()
+        self.logger.debug(f"Outbound User-Agent: {headers.get('User-Agent')}")
+
+        with requests.get(url, stream=True, verify=self.verify_ssl, headers=headers) as stream:
             stream.raise_for_status()
             with open(out_file, 'wb') as pipe:
                 with tqdm.wrapattr(
@@ -262,7 +284,7 @@ class Processes_API:
             from botocore import UNSIGNED
             from botocore.config import Config
         except Exception as exc:
-            raise ImportError(
+            raise ProcessingError(
                 "Downloading s3:// result files requires boto3. Install with: pip install boto3"
             ) from exc
 
