@@ -191,6 +191,24 @@ class AAA_API():
         self.response = None
         self.last_error = None
 
+    @staticmethod
+    def _token_tail(token, tail_len=8):
+        """Return a safe token fingerprint for logs without exposing full token."""
+        if not token:
+            return "none"
+        token_str = str(token)
+        if len(token_str) <= tail_len:
+            return token_str
+        return token_str[-tail_len:]
+
+    @staticmethod
+    def _fmt_dt(dt_val):
+        if dt_val is None:
+            return "none"
+        if hasattr(dt_val, "isoformat"):
+            return dt_val.isoformat()
+        return str(dt_val)
+
     def _record_error(self, message, status_code=None):
         self.last_error = AAAError(message, status_code=status_code)
         self.login_success = False
@@ -261,8 +279,17 @@ class AAA_API():
 
         self.aaa_creds.import_vals()
 
+        self.logger.info(
+            "AAA token state before decision: "
+            f"access_present={bool(self.aaa_creds.access_token)} "
+            f"refresh_present={bool(self.aaa_creds.refresh_token)} "
+            f"access_exp={self._fmt_dt(self.aaa_creds.access_exp)} "
+            f"refresh_exp={self._fmt_dt(self.aaa_creds.refresh_exp)} "
+            f"creds_file={self.aaa_creds.cred_fn}"
+        )
+
         if self.aaa_creds.access_token is None:
-            self.logger.info("No existing Access Token found. Logging in...")
+            self.logger.info("AAA token decision=login reason=no_access_token")
             self._login()
             return self.aaa_creds.access_token
 
@@ -271,16 +298,27 @@ class AAA_API():
         refresh_exp = self.aaa_creds.refresh_exp
 
         if now_dt >= access_exp and now_dt >= refresh_exp:
-            self.logger.info("Current Refresh Token has expired. "
-                        "Getting new Tokens...")
+            self.logger.info(
+                "AAA token decision=login reason=access_and_refresh_expired "
+                f"now={self._fmt_dt(now_dt)}"
+            )
 
             # Get a new token
             self._login()
         elif now_dt >= access_exp and now_dt < refresh_exp:
-            self.logger.info("Current Access Token has expired. "
-                  "Getting a new Access Token using current Refresh Token...")
+            self.logger.info(
+                "AAA token decision=refresh reason=access_expired_refresh_valid "
+                f"refresh_tail={self._token_tail(self.aaa_creds.refresh_token)} "
+                f"refresh_exp={self._fmt_dt(refresh_exp)}"
+            )
 
             self._refresh()
+        else:
+            self.logger.info(
+                "AAA token decision=reuse_cached_access reason=token_still_valid "
+                f"access_tail={self._token_tail(self.aaa_creds.access_token)} "
+                f"access_exp={self._fmt_dt(access_exp)}"
+            )
 
         if not self.login_success:
             self.logger.error("Could not access current AAA "
@@ -408,8 +446,11 @@ class AAA_API():
             self._record_error(failure_message, status_code=resp.status_code)
 
             if resp.status_code == 429:
-                self.logger.info("Attempting to get new Access Token "
-                      "using existing Refresh Token...")
+                self.logger.warning(
+                    "AAA login returned 429; attempting refresh fallback. "
+                    f"refresh_token_present={bool(self.aaa_creds.refresh_token)} "
+                    f"refresh_tail={self._token_tail(self.aaa_creds.refresh_token)}"
+                )
                 self._refresh()
 
     def _refresh(self):
@@ -421,6 +462,12 @@ class AAA_API():
         url = f"{self.domain}/aaa/v1/refresh"
 
         # resp = requests.get(url, verify=False)
+
+        self.logger.info(
+            "AAA refresh attempt: "
+            f"refresh_token_present={bool(self.aaa_creds.refresh_token)} "
+            f"refresh_tail={self._token_tail(self.aaa_creds.refresh_token)}"
+        )
 
         headers = {"Authorization": f"Bearer {self.aaa_creds.refresh_token}"}
         try:

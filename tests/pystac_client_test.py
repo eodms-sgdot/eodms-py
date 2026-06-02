@@ -21,6 +21,17 @@ if PROJECT_ROOT not in sys.path:
 from eodms import aaa, config
 
 
+class LoggingStacApiIO(StacApiIO):
+    def __init__(self, auth_label: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.auth_label = auth_label
+
+    def request(self, href, method=None, headers=None, parameters=None):
+        request_method = method or 'GET'
+        print(f"Using {self.auth_label} catalog: {request_method} {href}")
+        return super().request(href, method=method, headers=headers, parameters=parameters)
+
+
 def parse_aoi_file(aoi_file: str) -> List[Dict[str, Any]]:
     """Read polygon features from a GeoJSON, shapefile, or geopackage and return WKT strings."""
     try:
@@ -118,7 +129,7 @@ def open_client(env: str, username: Optional[str], password: Optional[str]) -> C
     search_endpoint = f"{domain}/search"
     verify_ssl = domain_config.get('verify_ssl', True)
 
-    stac_api_io = StacApiIO()
+    stac_api_io = LoggingStacApiIO("unauthenticated")
     stac_api_io.session.verify = verify_ssl
 
     if username and password:
@@ -126,12 +137,9 @@ def open_client(env: str, username: Optional[str], password: Optional[str]) -> C
         access_token = aaa_api.get_access_token()
         if access_token:
             stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
-            print(f"Using authenticated catalog: {search_endpoint}")
+            stac_api_io.auth_label = "authenticated"
         else:
             print("Authentication token unavailable; using unauthenticated catalog access.")
-            print(f"Using unauthenticated catalog: {search_endpoint}")
-    else:
-        print(f"Using unauthenticated catalog: {search_endpoint}")
 
     client = Client.open(search_endpoint, stac_io=stac_api_io)
     client.add_conforms_to("FILTER")

@@ -12,6 +12,7 @@ from . import config
 from .__version__ import __version__
 from .errors import CatalogError, SearchError
 
+
 class Search_API:
 	@staticmethod
 	def _default_user_agent() -> str:
@@ -61,8 +62,15 @@ class Search_API:
 		self.search_endpoint = f"{domain}/search"
 		verify_ssl = domain_config.get('verify_ssl', True)
 		self.logger = api_logger.EODMSLogger('eodms_search', api_logger.get_logger('search'))
+		self._catalog_auth_label = 'unauthenticated'
 
-		stac_api_io = StacApiIO()
+		def _log_stac_request(req):
+			method = getattr(req, 'method', 'GET')
+			url = getattr(req, 'url', self.search_endpoint)
+			self.logger.debug(f"Using {self._catalog_auth_label} catalog: {method} {url}")
+			return req
+
+		stac_api_io = StacApiIO(request_modifier=_log_stac_request)
 		stac_api_io.session.verify = verify_ssl
 		stac_api_io.session.headers.update({"User-Agent": self._default_user_agent()})
 		self.logger.debug(
@@ -81,17 +89,18 @@ class Search_API:
 				)
 				stac_api_io.session.headers.update({"Authorization": f"Bearer {access_token}"})
 				auth_enabled = True
-				self.logger.info(f"Using authenticated catalog: {self.search_endpoint}")
+				self._catalog_auth_label = 'authenticated'
 			else:
 				if getattr(aaa_api, "last_error", None) is not None:
 					self.logger.warning(f"Authentication unavailable; continuing unauthenticated. Details: {aaa_api.last_error}")
 				self.logger.warning("Authentication token unavailable; using unauthenticated catalog access.")
-				self.logger.info(f"Using unauthenticated catalog: {self.search_endpoint}")
-		else:
-			self.logger.info(f"Using unauthenticated catalog: {self.search_endpoint}")
 
 		try:
-			self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
+			self.client = Client.open(
+				self.search_endpoint,
+				stac_io=stac_api_io,
+				request_modifier=_log_stac_request,
+			)
 		except (APIError, Exception) as e:
 			if auth_enabled:
 				# Fallback when AAA is temporarily unhealthy or token is invalid/expired.
@@ -101,9 +110,13 @@ class Search_API:
 					f"Details: {e}"
 				)
 				stac_api_io.session.headers.pop("Authorization", None)
-				self.logger.info(f"Using unauthenticated catalog: {self.search_endpoint}")
+				self._catalog_auth_label = 'unauthenticated'
 				try:
-					self.client = Client.open(self.search_endpoint, stac_io=stac_api_io)
+					self.client = Client.open(
+						self.search_endpoint,
+						stac_io=stac_api_io,
+						request_modifier=_log_stac_request,
+					)
 				except Exception as fallback_error:
 					self.logger.error(f"Unauthenticated catalog initialization failed: {fallback_error}")
 					raise CatalogError(

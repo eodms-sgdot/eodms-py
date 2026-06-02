@@ -167,13 +167,6 @@ def run(
 
     if items is not None and output:
         save_items_geojson(items, output)
-    
-    if items and len(items) > 0 and eodms_user and eodms_pwd:
-        uuid = items[0].get('id')
-        print(f"Downloading the first image (UUID: {uuid}) from the list")
-        download(dds_api, collection, uuid, download_dir)
-    elif items and len(items) > 0:
-        print("No credentials provided, skipping download.")
 
 
 @click.command(context_settings={'help_option_names': ['-h', '--help']})
