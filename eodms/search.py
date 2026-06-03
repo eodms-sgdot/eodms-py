@@ -295,7 +295,8 @@ class Search_API:
 		collection_id = getattr(collection, "id", "unknown")
 		lines = [f"Collection '{collection_id}' queryables:"]
 		lines.extend(self._build_queryables_lines(collection))
-		self.logger.info("\n".join(lines))
+		message = "\n".join(lines)
+		self.logger.info("%s", message)
 
 	"""Print all available collections and their queryable fields."""
 	def print_collections(self) -> None:
@@ -307,7 +308,8 @@ class Search_API:
 			lines.append(f"  - Collection: {collection_id}")
 			lines.extend(self._build_queryables_lines(collection))
 
-		self.logger.info("\n".join(lines))
+		message = "\n".join(lines)
+		self.logger.info("%s", message)
 			
 
 	@staticmethod
