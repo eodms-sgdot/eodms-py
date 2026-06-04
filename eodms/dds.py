@@ -98,6 +98,23 @@ class DDS_API():
             f"Outbound User-Agent: {headers.get('User-Agent')}"
         )
 
+        def _as_positive_int(value):
+            if value is None:
+                return None
+            try:
+                parsed = int(str(value).strip())
+            except (TypeError, ValueError):
+                return None
+            if parsed > 0:
+                return parsed
+            return None
+
+        total_bytes = None
+        for key in ("size", "file_size", "bytes", "filesize", "content_length"):
+            total_bytes = _as_positive_int(self.img_info.get(key))
+            if total_bytes is not None:
+                break
+
         with requests.get(
             download_url,
             stream=True,
@@ -105,14 +122,28 @@ class DDS_API():
             headers=headers,
         ) as stream:
             stream.raise_for_status()
+
+            if total_bytes is None:
+                total_bytes = _as_positive_int(stream.headers.get('Content-Length'))
+
+            if total_bytes is not None:
+                self.logger.debug(f"DDS download size detected: {total_bytes} bytes")
+            else:
+                self.logger.debug("DDS download size unavailable; progress total/ETA disabled")
+
             with open(dest_fn, 'wb') as pipe:
-                with tqdm.wrapattr(
-                        pipe,
-                        method='write',
-                        miniters=1,
-                        desc=os.path.basename(dest_fn)
-                ) as file_out:
-                    for chunk in stream.iter_content(chunk_size=1024):
-                        file_out.write(chunk)
+                with tqdm(
+                    total=total_bytes,
+                    unit='B',
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    miniters=1,
+                    desc=os.path.basename(dest_fn),
+                ) as pbar:
+                    for chunk in stream.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        pipe.write(chunk)
+                        pbar.update(len(chunk))
 
         return dest_fn
