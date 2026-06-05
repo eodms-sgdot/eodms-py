@@ -3,6 +3,7 @@ from requests.packages import urllib3
 import ssl
 import os
 import json
+import time
 # import time
 from datetime import datetime, timedelta
 import dateparser
@@ -127,8 +128,11 @@ class AAA_Creds():
         Exports the credential values to the aaa_creds.json file.
         """
 
-        with open(self.cred_fn, 'w') as f:
+        # Write atomically so other processes never read a partially-written token file.
+        tmp_fn = f"{self.cred_fn}.tmp.{os.getpid()}"
+        with open(tmp_fn, 'w') as f:
             json.dump(self.get_json(), f)
+        os.replace(tmp_fn, self.cred_fn)
 
         return self.cred_fn
 
@@ -183,13 +187,68 @@ class AAA_API():
         user_folder = os.path.expanduser('~')
         self.auth_folder = os.path.join(user_folder, '.eodms')
         self.aaa_creds.set_fn(os.path.join(self.auth_folder, f'aaa_creds.{self.username}.{environment}.json'))
+        self._token_lock_fn = f"{self.aaa_creds.cred_fn}.lock"
+        self._token_lock_timeout = 30
+        self._token_lock_poll_interval = 0.2
+        self._token_lock_stale_seconds = 120
 
         if not os.path.exists(self.auth_folder):
-            os.makedirs(self.auth_folder)
+            os.makedirs(self.auth_folder, exist_ok=True)
 
         self.login_success = True
         self.response = None
         self.last_error = None
+
+    def _acquire_token_lock(self):
+        """Acquire an inter-process lock for token refresh/login operations."""
+
+        started = time.time()
+
+        while True:
+            try:
+                fd = os.open(self._token_lock_fn, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                with os.fdopen(fd, 'w') as lock_file:
+                    lock_file.write(f"pid={os.getpid()} created={datetime.now().isoformat()}\n")
+                return True
+            except FileExistsError:
+                try:
+                    mtime = os.path.getmtime(self._token_lock_fn)
+                    lock_age = time.time() - mtime
+                    if lock_age > self._token_lock_stale_seconds:
+                        self.logger.warning(
+                            "Detected stale AAA token lock; removing it. "
+                            f"lock_file={self._token_lock_fn} age_seconds={lock_age:.1f}"
+                        )
+                        os.remove(self._token_lock_fn)
+                        continue
+                except FileNotFoundError:
+                    # Lock released between checks; retry immediately.
+                    continue
+                except OSError:
+                    pass
+
+                if time.time() - started >= self._token_lock_timeout:
+                    self.logger.error(
+                        "Timed out waiting for AAA token lock. "
+                        f"lock_file={self._token_lock_fn} timeout_seconds={self._token_lock_timeout}"
+                    )
+                    self._record_error("Timed out waiting for AAA token lock.")
+                    return False
+
+                time.sleep(self._token_lock_poll_interval)
+
+    def _release_token_lock(self):
+        """Release the inter-process token lock."""
+
+        try:
+            os.remove(self._token_lock_fn)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            self.logger.warning(
+                "Failed to remove AAA token lock file. "
+                f"lock_file={self._token_lock_fn} error={e}"
+            )
 
     @staticmethod
     def _token_tail(token, tail_len=8):
@@ -276,58 +335,62 @@ class AAA_API():
                 Token has not
             - "logging" if both tokens have expired
         """
-
-        self.aaa_creds.import_vals()
-
-        self.logger.info(
-            "AAA token state before decision: "
-            f"access_present={bool(self.aaa_creds.access_token)} "
-            f"refresh_present={bool(self.aaa_creds.refresh_token)} "
-            f"access_exp={self._fmt_dt(self.aaa_creds.access_exp)} "
-            f"refresh_exp={self._fmt_dt(self.aaa_creds.refresh_exp)} "
-            f"creds_file={self.aaa_creds.cred_fn}"
-        )
-
-        if self.aaa_creds.access_token is None:
-            self.logger.info("AAA token decision=login reason=no_access_token")
-            self._login()
-            return self.aaa_creds.access_token
-
-        now_dt = datetime.now()
-        access_exp = self.aaa_creds.access_exp
-        refresh_exp = self.aaa_creds.refresh_exp
-
-        if now_dt >= access_exp and now_dt >= refresh_exp:
-            self.logger.info(
-                "AAA token decision=login reason=access_and_refresh_expired "
-                f"now={self._fmt_dt(now_dt)}"
-            )
-
-            # Get a new token
-            self._login()
-        elif now_dt >= access_exp and now_dt < refresh_exp:
-            self.logger.info(
-                "AAA token decision=refresh reason=access_expired_refresh_valid "
-                f"refresh_tail={self._token_tail(self.aaa_creds.refresh_token)} "
-                f"refresh_exp={self._fmt_dt(refresh_exp)}"
-            )
-
-            self._refresh()
-        else:
-            self.logger.info(
-                "AAA token decision=reuse_cached_access reason=token_still_valid "
-                f"access_tail={self._token_tail(self.aaa_creds.access_token)} "
-                f"access_exp={self._fmt_dt(access_exp)}"
-            )
-
-        if not self.login_success:
-            self.logger.error("Could not access current AAA "
-                  f"session with existing tokens in {self.aaa_creds.cred_fn}")
+        if not self._acquire_token_lock():
             return None
-            
-        # self._print_response()
 
-        return self.aaa_creds.access_token
+        try:
+            # Re-read under lock so only one process decides whether to login/refresh.
+            self.aaa_creds.import_vals()
+
+            self.logger.info(
+                "AAA token state before decision: "
+                f"access_present={bool(self.aaa_creds.access_token)} "
+                f"refresh_present={bool(self.aaa_creds.refresh_token)} "
+                f"access_exp={self._fmt_dt(self.aaa_creds.access_exp)} "
+                f"refresh_exp={self._fmt_dt(self.aaa_creds.refresh_exp)} "
+                f"creds_file={self.aaa_creds.cred_fn}"
+            )
+
+            if self.aaa_creds.access_token is None:
+                self.logger.info("AAA token decision=login reason=no_access_token")
+                self._login()
+                return self.aaa_creds.access_token
+
+            now_dt = datetime.now()
+            access_exp = self.aaa_creds.access_exp
+            refresh_exp = self.aaa_creds.refresh_exp
+
+            if now_dt >= access_exp and now_dt >= refresh_exp:
+                self.logger.info(
+                    "AAA token decision=login reason=access_and_refresh_expired "
+                    f"now={self._fmt_dt(now_dt)}"
+                )
+
+                # Get a new token
+                self._login()
+            elif now_dt >= access_exp and now_dt < refresh_exp:
+                self.logger.info(
+                    "AAA token decision=refresh reason=access_expired_refresh_valid "
+                    f"refresh_tail={self._token_tail(self.aaa_creds.refresh_token)} "
+                    f"refresh_exp={self._fmt_dt(refresh_exp)}"
+                )
+
+                self._refresh()
+            else:
+                self.logger.info(
+                    "AAA token decision=reuse_cached_access reason=token_still_valid "
+                    f"access_tail={self._token_tail(self.aaa_creds.access_token)} "
+                    f"access_exp={self._fmt_dt(access_exp)}"
+                )
+
+            if not self.login_success:
+                self.logger.error("Could not access current AAA "
+                    f"session with existing tokens in {self.aaa_creds.cred_fn}")
+                return None
+
+            return self.aaa_creds.access_token
+        finally:
+            self._release_token_lock()
     
     def prepare_request(self, url, method='GET', **kwargs):
 
