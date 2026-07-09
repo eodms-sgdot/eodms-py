@@ -115,11 +115,16 @@ class DDS_API():
             if total_bytes is not None:
                 break
 
-        with requests.get(
-            download_url,
+        req = requests.Request("GET", download_url, headers=headers)
+        prepared = req.prepare()
+        session = requests.Session()
+        proxies = requests.utils.get_environ_proxies(prepared.url)
+
+        with session.send(
+            prepared,
             stream=True,
             verify=self.verify_ssl,
-            headers=headers,
+            proxies=proxies,
         ) as stream:
             stream.raise_for_status()
 

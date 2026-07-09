@@ -38,6 +38,17 @@ def _capture_authorization(monkeypatch):
     return captured
 
 
+def _capture_verify(monkeypatch):
+    captured = []
+
+    def fake_send(self, request, **kwargs):
+        captured.append(kwargs.get("verify"))
+        return _AdapterResponse(request)
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", fake_send)
+    return captured
+
+
 def test_aaa_prepare_request_uses_https_proxy_env(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example.com:3128")
     monkeypatch.delenv("NO_PROXY", raising=False)
@@ -76,3 +87,30 @@ def test_aaa_prepare_request_ignores_netrc_auth_while_using_proxy_env(monkeypatc
     api.prepare_request("https://example.com/aaa/v1/login", method="POST", json={"username": "demo-user", "password": "demo-pass"})
 
     assert captured == [None]
+
+
+def test_aaa_prepare_request_uses_ca_bundle_on_staging(monkeypatch, tmp_path):
+    ca_bundle = str(tmp_path / "staging-ca.pem")
+    Path(ca_bundle).write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setenv("EODMS_STAGING_DOMAIN", "https://staging.example.com")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", ca_bundle)
+    captured = _capture_verify(monkeypatch)
+
+    api = AAA_API("demo-user", "demo-pass", "staging")
+    api.prepare_request("https://example.com/aaa/v1/login")
+
+    assert captured == [ca_bundle]
+
+
+def test_aaa_prepare_request_ignores_ca_bundle_env_on_prod(monkeypatch, tmp_path):
+    ca_bundle = str(tmp_path / "prod-ca-ignored.pem")
+    Path(ca_bundle).write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", ca_bundle)
+    captured = _capture_verify(monkeypatch)
+
+    api = AAA_API("demo-user", "demo-pass", "prod")
+    api.prepare_request("https://example.com/aaa/v1/login")
+
+    assert captured == [True]

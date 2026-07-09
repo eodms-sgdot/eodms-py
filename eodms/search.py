@@ -1,6 +1,7 @@
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, unquote, urlparse
+from copy import deepcopy
 
 import requests
 from pystac_client import Client, ItemSearch
@@ -13,7 +14,52 @@ from .__version__ import __version__
 from .errors import CatalogError, SearchError
 
 
+class _EODMSStacApiIO(StacApiIO):
+	"""StacApiIO variant that honors session.verify instead of forcing verify=True."""
+
+	def request(
+		self,
+		href: str,
+		method: str | None = None,
+		headers: dict[str, str] | None = None,
+		parameters: dict[str, Any] | None = None,
+	) -> str:
+		if method == "POST":
+			request = requests.Request(method=method, url=href, headers=headers, json=parameters)
+		else:
+			params = deepcopy(parameters) or {}
+			request = requests.Request(method="GET", url=href, headers=headers, params=params)
+
+		try:
+			modified = self._req_modifier(request) if self._req_modifier else None
+			prepped = self.session.prepare_request(modified or request)
+			send_kwargs = {
+				"proxies": dict(self.session.proxies or {}),
+				"verify": self.session.verify,
+				"cert": None,
+				"stream": False,
+			}
+			resp = self.session.send(prepped, timeout=self.timeout, **send_kwargs)
+		except Exception as err:
+			raise APIError(str(err)) from err
+
+		if resp.status_code != 200:
+			raise APIError.from_response(resp)
+
+		try:
+			return resp.content.decode("utf-8")
+		except Exception as err:
+			raise APIError(str(err)) from err
+
+
 class Search_API:
+	@staticmethod
+	def _is_cert_verify_error(exc: Exception) -> bool:
+		if isinstance(exc, requests.exceptions.SSLError):
+			return True
+		msg = str(exc).lower()
+		return "certificate verify failed" in msg or "certificate_verify_failed" in msg
+
 	@staticmethod
 	def _default_user_agent() -> str:
 		return f"{requests.utils.default_user_agent()} eodms-py/{__version__}"
@@ -61,6 +107,7 @@ class Search_API:
 		domain = domain_config['domain']
 		self.search_endpoint = f"{domain}/search"
 		verify_ssl = domain_config.get('verify_ssl', True)
+		is_staging = environment == 'staging'
 		self.logger = api_logger.EODMSLogger('eodms_search', api_logger.get_logger('search'))
 		self._catalog_auth_label = 'unauthenticated'
 
@@ -70,8 +117,10 @@ class Search_API:
 			self.logger.debug(f"Using {self._catalog_auth_label} catalog: {method} {url}")
 			return req
 
-		stac_api_io = StacApiIO(request_modifier=_log_stac_request)
+		stac_api_io = _EODMSStacApiIO(request_modifier=_log_stac_request)
 		stac_api_io.session.verify = verify_ssl
+		stac_api_io.session.proxies.update(requests.utils.get_environ_proxies(self.search_endpoint))
+		stac_api_io.session.trust_env = False
 		stac_api_io.session.headers.update({"User-Agent": self._default_user_agent()})
 		self.logger.debug(
 			f"Outbound User-Agent: {stac_api_io.session.headers.get('User-Agent')}"
@@ -95,36 +144,49 @@ class Search_API:
 					self.logger.warning(f"Authentication unavailable; continuing unauthenticated. Details: {aaa_api.last_error}")
 				self.logger.warning("Authentication token unavailable; using unauthenticated catalog access.")
 
-		try:
-			self.client = Client.open(
+		def _open_client():
+			return Client.open(
 				self.search_endpoint,
 				stac_io=stac_api_io,
 				request_modifier=_log_stac_request,
 			)
+
+		try:
+			self.client = _open_client()
 		except (APIError, Exception) as e:
+			root_exc = e
+
+			if is_staging and isinstance(verify_ssl, str) and self._is_cert_verify_error(e):
+				self.logger.warning(
+					"Staging catalog TLS verification failed using configured CA bundle; "
+					"retrying with verify=False."
+				)
+				stac_api_io.session.verify = False
+				try:
+					self.client = _open_client()
+					return
+				except (APIError, Exception) as fallback_exc:
+					root_exc = fallback_exc
+
 			if auth_enabled:
 				# Fallback when AAA is temporarily unhealthy or token is invalid/expired.
 				self.logger.error(
 					"Authenticated catalog initialization failed; "
 					"retrying unauthenticated access. "
-					f"Details: {e}"
+					f"Details: {root_exc}"
 				)
 				stac_api_io.session.headers.pop("Authorization", None)
 				self._catalog_auth_label = 'unauthenticated'
 				try:
-					self.client = Client.open(
-						self.search_endpoint,
-						stac_io=stac_api_io,
-						request_modifier=_log_stac_request,
-					)
+					self.client = _open_client()
 				except Exception as fallback_error:
 					self.logger.error(f"Unauthenticated catalog initialization failed: {fallback_error}")
 					raise CatalogError(
 						f"Unable to initialize STAC catalog after authentication fallback: {fallback_error}"
 					) from fallback_error
 			else:
-				self.logger.error(f"Catalog initialization failed: {e}")
-				raise CatalogError(f"Unable to initialize STAC catalog: {e}") from e
+				self.logger.error(f"Catalog initialization failed: {root_exc}")
+				raise CatalogError(f"Unable to initialize STAC catalog: {root_exc}") from root_exc
 		self.client.add_conforms_to("FILTER")
 		self.client.add_conforms_to("QUERY")
 
@@ -177,12 +239,9 @@ class Search_API:
 		"""Normalize a CQL2 text filter string."""
 		if not filter_text:
 			return None
-
-		filter_text = filter_text.strip()
-		if not filter_text:
+		if not filter_text.strip():
 			return None
 
-		# Normalize compact comparisons like "field=16" to "field = 16".
 		filter_text = re.sub(r"\s*(<=|>=|<>|=|<|>)\s*", r" \1 ", filter_text)
 		filter_text = re.sub(r"\s+", " ", filter_text).strip()
 
@@ -194,7 +253,7 @@ class Search_API:
 		geometry_field: str = "geometry",
 		spatial_op: str = "S_INTERSECTS",
 	) -> Optional[str]:
-		"""Build a CQL2 spatial expression from a WKT geometry string."""
+		"""Build a CQL2 spatial predicate from WKT geometry."""
 		if not geometry_wkt:
 			return None
 
@@ -203,7 +262,6 @@ class Search_API:
 			return None
 
 		op = (spatial_op or "S_INTERSECTS").strip().upper()
-		# Gracefully normalize the common singular alias to server-supported plural form.
 		if op == "S_INTERSECT":
 			op = "S_INTERSECTS"
 

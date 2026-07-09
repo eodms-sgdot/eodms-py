@@ -265,7 +265,12 @@ class Processes_API:
         headers = self._apply_user_agent()
         self.logger.debug(f"Outbound User-Agent: {headers.get('User-Agent')}")
 
-        with requests.get(url, stream=True, verify=self.verify_ssl, headers=headers) as stream:
+        req = requests.Request('GET', url, headers=headers)
+        prepared = req.prepare()
+        session = requests.Session()
+        proxies = requests.utils.get_environ_proxies(prepared.url)
+
+        with session.send(prepared, stream=True, verify=self.verify_ssl, proxies=proxies) as stream:
             stream.raise_for_status()
             with open(out_file, 'wb') as pipe:
                 with tqdm.wrapattr(

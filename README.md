@@ -142,6 +142,22 @@ downloaded = proc_api.download_job_results(job_id, out_dir=f'./data/{job_id}')
 print(downloaded)
 ```
 
+### Environment and TLS Behavior
+
+The `--env` flag controls TLS verification behavior in the client, so you can keep proxy and CA environment variables set all the time without shell toggling.
+
+- `prod`
+  - Ignores CA-bundle environment variables (`REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`).
+  - Uses standard certificate verification (`verify=True`).
+- `staging`
+  - Requires `EODMS_STAGING_DOMAIN`.
+  - Uses `REQUESTS_CA_BUNDLE`, then `SSL_CERT_FILE`, then `CURL_CA_BUNDLE` when set.
+  - Falls back to insecure mode (`verify=False`) if no CA-bundle variable is set.
+
+Proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) are respected in both environments.
+
+This keeps EODMS credentials managed by the client while avoiding accidental auth side effects from ambient `.netrc` settings.
+
 ## Testing
 
 ### Clone Repository

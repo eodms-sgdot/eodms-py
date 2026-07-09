@@ -8,6 +8,7 @@ import pytest
 import requests
 
 from eodms.search import Search_API
+from eodms.errors import CatalogError
 
 
 REAL_SATELLITE_ID = "RCM-1"
@@ -394,6 +395,53 @@ def test_get_item_returns_none_for_unknown_collection(capsys):
     captured = capsys.readouterr()
     assert item is None
     assert "Collection not found: UnknownCollection" in captured.out
+
+
+def test_search_api_staging_retries_without_verify_on_cert_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("EODMS_STAGING_DOMAIN", "https://staging.example.com")
+    ca_bundle = str(tmp_path / "staging-ca.pem")
+    with open(ca_bundle, "w", encoding="utf-8") as f:
+        f.write("placeholder")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", ca_bundle)
+
+    verify_values = []
+
+    def fake_open(url, headers=None, parameters=None, ignore_conformance=None, modifier=None, request_modifier=None, stac_io=None, timeout=None):
+        verify_values.append(stac_io.session.verify)
+        if len(verify_values) == 1:
+            raise requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED")
+
+        class _Client:
+            pass
+
+        return _Client()
+
+    monkeypatch.setattr("eodms.search.Client.open", fake_open)
+
+    Search_API(None, "staging")
+
+    assert verify_values == [ca_bundle, False]
+
+
+def test_search_api_prod_does_not_retry_without_verify_on_cert_failure(monkeypatch, tmp_path):
+    ca_bundle = str(tmp_path / "prod-ca.pem")
+    with open(ca_bundle, "w", encoding="utf-8") as f:
+        f.write("placeholder")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", ca_bundle)
+
+    call_count = 0
+
+    def fake_open(url, headers=None, parameters=None, ignore_conformance=None, modifier=None, request_modifier=None, stac_io=None, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        raise requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED")
+
+    monkeypatch.setattr("eodms.search.Client.open", fake_open)
+
+    with pytest.raises(CatalogError, match="Unable to initialize STAC catalog"):
+        Search_API(None, "prod")
+
+    assert call_count == 1
 
 
 @pytest.mark.integration
