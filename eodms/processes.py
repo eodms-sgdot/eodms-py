@@ -82,8 +82,8 @@ class Processes_API:
         req = requests.Request(method, url, headers=headers, json=json_payload, params=params)
         prepared = req.prepare()
         session = requests.Session()
-        session.trust_env = False
-        return session.send(prepared, verify=self.verify_ssl)
+        proxies = requests.utils.get_environ_proxies(prepared.url)
+        return session.send(prepared, verify=self.verify_ssl, proxies=proxies)
 
     @staticmethod
     def _require_json(resp: requests.Response) -> Dict[str, Any]:
