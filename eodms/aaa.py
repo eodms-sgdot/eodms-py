@@ -405,8 +405,8 @@ class AAA_API():
         
         # Send the request
         session = requests.Session()
-        session.trust_env = False
-        response = session.send(prepared, verify=self.verify_ssl)
+        proxies = requests.utils.get_environ_proxies(prepared.url)
+        response = session.send(prepared, verify=self.verify_ssl, proxies=proxies)
 
         #self.logger.info(f"response headers: {response.request.headers}")
 
