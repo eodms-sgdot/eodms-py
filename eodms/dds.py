@@ -3,6 +3,7 @@ import requests
 from requests.packages import urllib3
 from tqdm.auto import tqdm
 import ssl
+from datetime import datetime, timezone
 from urllib.parse import unquote
 from urllib.parse import urlparse, parse_qs
 
@@ -11,6 +12,38 @@ from . import aaa
 from . import api_logger
 from . import config
 from .errors import DDSError
+
+
+def _extract_download_expires(download_url):
+    if not download_url:
+        return None, None
+
+    query_params = parse_qs(urlparse(str(download_url)).query)
+    expires_values = query_params.get('Expires') or query_params.get('expires')
+    if not expires_values:
+        return None, None
+
+    try:
+        expires_timestamp = int(str(expires_values[0]).strip())
+        expires_at = datetime.fromtimestamp(expires_timestamp, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None, None
+
+    return expires_timestamp, expires_at
+
+
+def _enrich_download_url_metadata(item_info):
+    if not isinstance(item_info, dict):
+        return item_info
+
+    expires_timestamp, expires_at = _extract_download_expires(item_info.get('download_url'))
+    if expires_timestamp is None:
+        return item_info
+
+    item_info['download_expires'] = expires_timestamp
+    item_info['download_expires_at'] = expires_at
+    return item_info
+
 
 class DDS_API():
     """Client for the EODMS Data Delivery Service (DDS) API."""
@@ -44,6 +77,7 @@ class DDS_API():
             self.logger.info(f"Successfully got item {collection}/{item_uuid}")
             try:
                 self.img_info = resp.json()
+                _enrich_download_url_metadata(self.img_info)
             except Exception as exc:
                 resp_text = resp.text or ""
                 if resp_text.lstrip().upper().startswith('<HTML>'):
@@ -52,6 +86,7 @@ class DDS_API():
         elif resp.status_code == 202:
             try:
                 self.img_info = resp.json()
+                _enrich_download_url_metadata(self.img_info)
             except Exception as exc:
                 raise DDSError("DDS API returned invalid JSON for accepted item response.") from exc
             status = self.img_info.get('status')
