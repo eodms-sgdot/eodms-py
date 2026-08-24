@@ -160,7 +160,7 @@ class Processes_API:
         slc_type: str = 'beta0',
         lookup_table: str = 'mixed',
         start_time: Optional[str] = None,
-        stop_time: Optional[str] = None,
+        end_time: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit RADARSAT-1 processing request using notebook-compatible inputs."""
         inputs = {
@@ -171,8 +171,8 @@ class Processes_API:
 
         if start_time:
             inputs['start_time'] = start_time
-        if stop_time:
-            inputs['stop_time'] = stop_time
+        if end_time:
+            inputs['end_time'] = end_time
 
         return self.submit_process(process_id=process_id, inputs=inputs)
 

@@ -92,7 +92,7 @@ def _example_scalar_from_schema(schema: Dict[str, Any], input_name: str) -> Any:
     lower_name = input_name.lower()
     if lower_name in ('uuid', 'id', 'segment_id'):
         return "00000000-0000-0000-0000-000000000000"
-    if lower_name in ('start_time', 'stop_time'):
+    if lower_name in ('start_time', 'end_time'):
         return "2000-01-01T00:00:00Z"
 
     return "example"

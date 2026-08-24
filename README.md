@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
 ### Run OGC Processes Jobs (RADARSAT-1 L1)
 
-The `Processes_API` class provides helpers for the EODMS OGC Processes workflow used in [radarsat1_l1_processing.ipynb](./tests/radarsat1_l1_processing.ipynb):
+The `Processes_API` class provides helpers for the EODMS OGC Processes workflow used in [radarsat1_l1_processing.ipynb](https://github.com/eodms-sgdot/radarsat-notebooks/blob/main/examples/radarsat1_l1_processing.ipynb):
 
 - list processes
 - print process input schema
