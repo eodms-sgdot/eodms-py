@@ -1,13 +1,15 @@
 import os
 import logging
 import sys
+import time
 import warnings
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
+from pystac_client.exceptions import APIError
 
-from eodms.search import Search_API
+from eodms.search import Search_API, _EODMSStacApiIO
 from eodms.errors import CatalogError
 
 
@@ -227,6 +229,98 @@ def test_parse_filter_text_normalizes_integer_comparison_spacing():
 
 def test_parse_filter_text_empty_returns_none():
     assert Search_API.parse_filter_text("   ") is None
+
+
+def test_stac_io_does_not_retry_rate_limited_request_without_retry_after(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, content=b"{}", headers=None):
+            self.status_code = status_code
+            self.content = content
+            self.text = content.decode("utf-8")
+            self.headers = headers or {}
+
+    class FakeSession:
+        def __init__(self):
+            self.proxies = {}
+            self.verify = True
+            self.headers = {}
+            self.responses = [
+                FakeResponse(429),
+                FakeResponse(429),
+                FakeResponse(200, content=b'{"ok": true}'),
+            ]
+
+        def prepare_request(self, request):
+            return request
+
+        def send(self, request, **kwargs):
+            return self.responses.pop(0)
+
+    api_io = object.__new__(_EODMSStacApiIO)
+    api_io.session = FakeSession()
+    api_io.timeout = None
+    api_io._req_modifier = None
+    api_io.rate_limit_retries = 3
+    api_io.logger = logging.getLogger("eodms.test.rate_limit")
+
+    delays = []
+    monkeypatch.setattr("eodms.search.time.sleep", delays.append)
+
+    with pytest.raises(APIError):
+        api_io.request("https://example.test/items")
+    assert delays == []
+
+
+def test_stac_io_rate_limit_honors_retry_after(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, headers=None):
+            self.status_code = status_code
+            self.content = b"{}"
+            self.headers = headers or {}
+
+    class FakeSession:
+        def __init__(self):
+            self.proxies = {}
+            self.verify = True
+            self.headers = {}
+            self.responses = [
+                FakeResponse(429, {"Retry-After": "0"}),
+                FakeResponse(429, {"Retry-After": "8"}),
+                FakeResponse(429, {"Retry-After": "9"}),
+                FakeResponse(200),
+            ]
+
+        def prepare_request(self, request):
+            return request
+
+        def send(self, request, **kwargs):
+            return self.responses.pop(0)
+
+    api_io = object.__new__(_EODMSStacApiIO)
+    api_io.session = FakeSession()
+    api_io.timeout = None
+    api_io._req_modifier = None
+    api_io.rate_limit_retries = 3
+    api_io.logger = logging.getLogger("eodms.test.retry_after")
+
+    delays = []
+    real_sleep = time.sleep
+
+    def record_sleep(delay):
+        reattempt = len(delays) + 1
+        retry_after = ["0", "8", "9"][len(delays)]
+        applied_delay = "default 10.0" if retry_after == "0" else f"{delay:.1f}"
+        print(
+            f"\033[1;93mRetry-After: {retry_after} seconds; sleeping {applied_delay} seconds "
+            f"before reattempt {reattempt}\033[0m"
+        )
+        real_sleep(delay)
+        delays.append(delay)
+
+    monkeypatch.setattr("eodms.search.time.sleep", record_sleep)
+
+    assert api_io.request("https://example.test/items") == "{}"
+    assert delays == [10.0, 8.0, 9.0]
 
 
 def test_build_spatial_filter_expression_normalizes_singular_alias():

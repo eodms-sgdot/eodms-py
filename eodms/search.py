@@ -1,5 +1,8 @@
 import re
+import time
 from typing import Any, Dict, List, Optional
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlparse
 from copy import deepcopy
 
@@ -13,9 +16,52 @@ from . import config
 from .__version__ import __version__
 from .errors import CatalogError, SearchError
 
+DEFAULT_RATE_LIMIT_RETRIES = 3
+DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 10.0
+
 
 class _EODMSStacApiIO(StacApiIO):
 	"""StacApiIO variant that honors session.verify instead of forcing verify=True."""
+
+	def _retry_after_auth_refresh(self, request, send_kwargs):
+		refresh_auth = getattr(self, "refresh_auth", None)
+		if not callable(refresh_auth):
+			self.logger.warning("STAC request returned 401; no authentication refresh callback is configured.")
+			return None
+
+		if not refresh_auth():
+			self.logger.warning("STAC request returned 401; authentication refresh did not provide a new token.")
+			return None
+
+		self.logger.info("STAC request returned 401; authentication refreshed, retrying request.")
+		refreshed_request = self.session.prepare_request(request)
+		return self.session.send(refreshed_request, timeout=self.timeout, **send_kwargs)
+
+	def _rate_limit_delay(self, response, retry_number):
+		retry_after = response.headers.get("Retry-After")
+		if retry_after:
+			try:
+				delay = float(retry_after)
+				return (
+					DEFAULT_RATE_LIMIT_BACKOFF_SECONDS if delay <= 0 else delay,
+					retry_after,
+					delay <= 0,
+				)
+			except ValueError:
+				try:
+					retry_at = parsedate_to_datetime(retry_after)
+					if retry_at.tzinfo is None:
+						retry_at = retry_at.replace(tzinfo=timezone.utc)
+					delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+					return (
+						DEFAULT_RATE_LIMIT_BACKOFF_SECONDS if delay <= 0 else delay,
+						retry_after,
+						delay <= 0,
+					)
+				except (TypeError, ValueError, OverflowError):
+					pass
+
+		return None, retry_after, False
 
 	def request(
 		self,
@@ -32,14 +78,52 @@ class _EODMSStacApiIO(StacApiIO):
 
 		try:
 			modified = self._req_modifier(request) if self._req_modifier else None
-			prepped = self.session.prepare_request(modified or request)
 			send_kwargs = {
 				"proxies": dict(self.session.proxies or {}),
 				"verify": self.session.verify,
 				"cert": None,
 				"stream": False,
 			}
-			resp = self.session.send(prepped, timeout=self.timeout, **send_kwargs)
+			auth_retry_used = False
+			rate_limit_retries = 0
+			while True:
+				prepped = self.session.prepare_request(modified or request)
+				resp = self.session.send(prepped, timeout=self.timeout, **send_kwargs)
+				if resp.status_code == 401 and not auth_retry_used:
+					auth_retry_used = True
+					self.logger.warning("STAC request unauthorized (401); attempting one authentication refresh.")
+					refreshed_response = self._retry_after_auth_refresh(modified or request, send_kwargs)
+					if refreshed_response is not None:
+						resp = refreshed_response
+						if resp.status_code != 429:
+							break
+					else:
+						break
+				if resp.status_code != 429:
+					break
+				if rate_limit_retries >= self.rate_limit_retries:
+					break
+				delay, retry_after, used_default = self._rate_limit_delay(resp, rate_limit_retries)
+				if delay is None:
+					break
+				rate_limit_retries += 1
+				display_delay = "0" if delay == 0 else f"{delay:.3f}".rstrip("0").rstrip(".")
+				self.logger.warning(
+					f"STAC request rate limited (429); retry {rate_limit_retries}/"
+					f"{self.rate_limit_retries} after Retry-After={retry_after!r}; "
+					f"sleeping {display_delay} seconds."
+				)
+				fallback_message = (
+					f"using default {DEFAULT_RATE_LIMIT_BACKOFF_SECONDS:.1f} seconds"
+					if used_default
+					else "using server-provided delay"
+				)
+				self.logger.info(
+					f"STAC Retry-After={retry_after!r} parsed to {display_delay} seconds; "
+					f"{fallback_message}; "
+					f"calling time.sleep({delay!r})."
+				)
+				time.sleep(delay)
 		except Exception as err:
 			raise APIError(str(err)) from err
 
@@ -102,7 +186,12 @@ class Search_API:
 						seen_ids.add(item_id)
 		return all_items
 
-	def __init__(self, aaa_api=None, environment='prod'):
+	def __init__(
+		self,
+		aaa_api=None,
+		environment='prod',
+		rate_limit_retries=DEFAULT_RATE_LIMIT_RETRIES,
+	):
 		domain_config = config.get_domain_config(environment)
 		domain = domain_config['domain']
 		self.search_endpoint = f"{domain}/search"
@@ -110,6 +199,8 @@ class Search_API:
 		is_staging = environment == 'staging'
 		self.logger = api_logger.EODMSLogger('eodms_search', api_logger.get_logger('search'))
 		self._catalog_auth_label = 'unauthenticated'
+		self.aaa_api = aaa_api
+		self.rate_limit_retries = max(0, int(rate_limit_retries))
 
 		def _log_stac_request(req):
 			method = getattr(req, 'method', 'GET')
@@ -118,6 +209,9 @@ class Search_API:
 			return req
 
 		stac_api_io = _EODMSStacApiIO(request_modifier=_log_stac_request)
+		stac_api_io.logger = self.logger
+		stac_api_io.rate_limit_retries = self.rate_limit_retries
+		stac_api_io.refresh_auth = self._refresh_auth
 		stac_api_io.session.verify = verify_ssl
 		stac_api_io.session.proxies.update(requests.utils.get_environ_proxies(self.search_endpoint))
 		stac_api_io.session.trust_env = False
@@ -189,6 +283,23 @@ class Search_API:
 				raise CatalogError(f"Unable to initialize STAC catalog: {root_exc}") from root_exc
 		self.client.add_conforms_to("FILTER")
 		self.client.add_conforms_to("QUERY")
+
+	def _refresh_auth(self) -> bool:
+		if self.aaa_api is None:
+			return False
+
+		access_token = self.aaa_api.get_access_token()
+		if not access_token:
+			return False
+
+		stac_io = getattr(self.client, "_stac_io", None)
+		session = getattr(stac_io, "session", None)
+		if session is None:
+			return False
+
+		session.headers.update({"Authorization": f"Bearer {access_token}"})
+		self._catalog_auth_label = 'authenticated'
+		return True
 
 	@staticmethod
 	def extract_filter_fields(filter_text: Optional[str]) -> List[str]:
